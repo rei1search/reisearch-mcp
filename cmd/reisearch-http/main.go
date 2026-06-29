@@ -43,8 +43,14 @@ func main() {
 		log.Fatal(err)
 	}
 
+	asHandler, err := oauth.NewAuthServerMetadataHandler(context.Background(), resource, issuer)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource, issuer))
+	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource))
+	mux.Handle("/.well-known/oauth-authorization-server", asHandler)
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
 
