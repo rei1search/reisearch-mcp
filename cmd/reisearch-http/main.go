@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rei1search/reisearch-mcp/internal/oauth"
@@ -47,9 +48,21 @@ func main() {
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
 
-	if err := http.ListenAndServe(":4479", mux); err != nil {
+	log.Printf("reisearch-mcp config: resource=%s issuer=%s api=%s", resource, issuer, baseURL)
+	log.Printf("reisearch-mcp listening on :4479")
+	if err := http.ListenAndServe(":4479", logRequests(mux)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// logRequests logs each request without wrapping the ResponseWriter, so the
+// MCP handler's SSE streaming (which needs http.Flusher) keeps working.
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s %s %v", r.RemoteAddr, r.Method, r.URL.Path, time.Since(start))
+	})
 }
 
 func welcome(w http.ResponseWriter, r *http.Request) {
