@@ -42,59 +42,61 @@ type AuthServerMetadata struct {
 	ScopesSupported                   []string `json:"scopes_supported"`
 }
 
-// cognitoConfig is the subset of Cognito's openid-configuration we read.
-type cognitoConfig struct {
-	AuthorizationEndpoint string   `json:"authorization_endpoint"`
-	TokenEndpoint         string   `json:"token_endpoint"`
-	JwksURI               string   `json:"jwks_uri"`
-	ScopesSupported       []string `json:"scopes_supported"`
+// CognitoConfig is the subset of Cognito's openid-configuration we use.
+type CognitoConfig struct {
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	JwksURI               string `json:"jwks_uri"`
 }
 
-// NewAuthServerMetadataHandler fetches Cognito's openid-configuration once at
-// startup, then serves an RFC 8414 doc whose issuer is our own domain but whose
-// endpoints point at Cognito. This lets MCP clients (Claude.ai, ChatGPT)
-// discover where to run the authorization-code flow.
-func NewAuthServerMetadataHandler(ctx context.Context, resource, issuer string) (http.HandlerFunc, error) {
+// FetchCognitoConfig reads Cognito's openid-configuration once at startup so we
+// can reuse its real endpoints across our metadata, token-proxy and JWKS.
+func FetchCognitoConfig(ctx context.Context, issuer string) (CognitoConfig, error) {
+	var cfg CognitoConfig
 	configURL := issuer + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, configURL, nil)
 	if err != nil {
-		return nil, err
+		return cfg, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch cognito openid-configuration: %w", err)
+		return cfg, fmt.Errorf("fetch cognito openid-configuration: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("cognito openid-configuration returned %d", resp.StatusCode)
+		return cfg, fmt.Errorf("cognito openid-configuration returned %d", resp.StatusCode)
 	}
-
-	var cfg cognitoConfig
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("decode cognito openid-configuration: %w", err)
+		return cfg, fmt.Errorf("decode cognito openid-configuration: %w", err)
 	}
+	return cfg, nil
+}
 
+// NewAuthServerMetadataHandler serves an RFC 8414 doc. The authorization
+// endpoint points straight at Cognito, but the token endpoint points back at
+// our own /token proxy so we can observe and adjust the exchange.
+func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) http.HandlerFunc {
 	metadata := AuthServerMetadata{
 		// issuer must equal the iss claim Cognito stamps on its tokens, or
 		// clients reject the tokens after exchange. We still serve this doc
-		// (and the registration_endpoint) from our own domain.
-		Issuer:                issuer,
-		AuthorizationEndpoint: cfg.AuthorizationEndpoint,
-		TokenEndpoint:                     cfg.TokenEndpoint,
+		// (and the registration/token endpoints) from our own domain.
+		Issuer:                            issuer,
+		AuthorizationEndpoint:             cfg.AuthorizationEndpoint,
+		TokenEndpoint:                     resource + "/token",
 		RegistrationEndpoint:              resource + "/register",
 		JwksURI:                           cfg.JwksURI,
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
-		// We advertise the scopes the app client allows, not cfg.ScopesSupported.
-		// The pool's openid-configuration lists "profile" too, but the app client
-		// does not enable it, so requesting it makes Cognito reject the authorize.
+		// We advertise the scopes the app client allows, not the pool's full
+		// list. The pool also lists "profile", but the app client does not
+		// enable it, so requesting it makes Cognito reject the authorize.
 		ScopesSupported: []string{"openid", "email", "phone"},
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(metadata)
-	}, nil
+	}
 }

@@ -48,15 +48,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	asHandler, err := oauth.NewAuthServerMetadataHandler(context.Background(), resource, issuer)
+	cfg, err := oauth.FetchCognitoConfig(context.Background(), issuer)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource))
-	mux.Handle("/.well-known/oauth-authorization-server", asHandler)
+	mux.Handle("/.well-known/oauth-authorization-server", oauth.NewAuthServerMetadataHandler(resource, issuer, cfg))
 	mux.Handle("/register", oauth.NewRegistrationHandler(clientID, clientSecret))
+	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret))
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
 
