@@ -84,7 +84,10 @@ func NewAuthServerMetadataHandler(ctx context.Context, resource, issuer string) 
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
-		ScopesSupported:                   cfg.ScopesSupported,
+		// We advertise the scopes the app client allows, not cfg.ScopesSupported.
+		// The pool's openid-configuration lists "profile" too, but the app client
+		// does not enable it, so requesting it makes Cognito reject the authorize.
+		ScopesSupported: []string{"openid", "email", "phone"},
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
