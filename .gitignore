@@ -1,0 +1,14 @@
+# Secrets / local env
+.env
+.env.*
+
+# Stray/accidental files
+/-
+
+# Built binaries
+/reisearch-http
+/reisearch-mcp
+*.exe
+
+# OS junk
+.DS_Store
