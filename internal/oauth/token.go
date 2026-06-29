@@ -8,13 +8,34 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
-// NewTokenProxyHandler forwards the authorization-code exchange to Cognito. It
-// exists so we can (a) log exactly what the MCP client sends and what Cognito
-// returns, and (b) inject the client_secret when the client runs a PKCE-only
-// (public) exchange but the Cognito app client requires a secret.
+// cachedToken is a successful token response we replay for duplicate exchanges
+// of the same single-use authorization code.
+type cachedToken struct {
+	status      int
+	contentType string
+	body        []byte
+}
+
+// NewTokenProxyHandler forwards the authorization-code exchange to Cognito.
+//
+// MCP clients (Claude.ai) redeem the single-use authorization code more than
+// once. Cognito rejects the second redemption with invalid_grant, which the
+// client treats as fatal. To absorb that, we cache the first successful
+// response keyed by the code and replay it for any later redemption of the
+// same code instead of forwarding the now-spent code to Cognito.
+//
+// It also (a) logs what the client sends and what Cognito returns, and (b)
+// injects the client_secret when the client runs a PKCE-only (public) exchange
+// but the Cognito app client requires a secret.
 func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret string) http.HandlerFunc {
+	var (
+		mu    sync.Mutex
+		cache = map[string]cachedToken{}
+	)
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -41,6 +62,21 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret string) http.Han
 			code,
 			derivedChallenge,
 		)
+
+		// Serialize redemptions of the same code so a duplicate either waits for
+		// or replays the first result rather than racing it.
+		mu.Lock()
+		defer mu.Unlock()
+
+		if code != "" {
+			if cached, ok := cache[code]; ok {
+				log.Printf("token proxy: replaying cached response for code=%.12s...", code)
+				w.Header().Set("Content-Type", cached.contentType)
+				w.WriteHeader(cached.status)
+				w.Write(cached.body)
+				return
+			}
+		}
 
 		// Cognito's app client is confidential; if the client didn't send the
 		// secret (PKCE public flow) inject it so Cognito accepts the exchange.
@@ -71,7 +107,12 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret string) http.Han
 		respBody, _ := io.ReadAll(resp.Body)
 		log.Printf("token proxy: cognito status=%d body=%s", resp.StatusCode, string(respBody))
 
-		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		contentType := resp.Header.Get("Content-Type")
+		if code != "" && resp.StatusCode == http.StatusOK {
+			cache[code] = cachedToken{status: resp.StatusCode, contentType: contentType, body: respBody}
+		}
+
+		w.Header().Set("Content-Type", contentType)
 		w.WriteHeader(resp.StatusCode)
 		w.Write(respBody)
 	}

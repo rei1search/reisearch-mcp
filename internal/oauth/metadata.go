@@ -77,10 +77,11 @@ func FetchCognitoConfig(ctx context.Context, issuer string) (CognitoConfig, erro
 // our own /token proxy so we can observe and adjust the exchange.
 func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) http.HandlerFunc {
 	metadata := AuthServerMetadata{
-		// issuer must equal the iss claim Cognito stamps on its tokens, or
-		// clients reject the tokens after exchange. We still serve this doc
-		// (and the registration/token endpoints) from our own domain.
-		Issuer:                            issuer,
+		// Advertise ourselves as the issuer so the client discovers ONLY our
+		// endpoints. If we advertised Cognito's issuer, the client does its own
+		// OIDC discovery on Cognito and redeems the single-use code directly
+		// there (bypassing our /token), causing a duplicate redemption.
+		Issuer:                            resource,
 		AuthorizationEndpoint:             resource + "/authorize",
 		TokenEndpoint:                     resource + "/token",
 		RegistrationEndpoint:              resource + "/register",
