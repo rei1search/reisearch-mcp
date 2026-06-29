@@ -81,7 +81,7 @@ func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) ht
 		// clients reject the tokens after exchange. We still serve this doc
 		// (and the registration/token endpoints) from our own domain.
 		Issuer:                            issuer,
-		AuthorizationEndpoint:             cfg.AuthorizationEndpoint,
+		AuthorizationEndpoint:             resource + "/authorize",
 		TokenEndpoint:                     resource + "/token",
 		RegistrationEndpoint:              resource + "/register",
 		JwksURI:                           cfg.JwksURI,
