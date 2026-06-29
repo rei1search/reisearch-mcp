@@ -1,6 +1,8 @@
 package oauth
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"io"
 	"log"
 	"net/http"
@@ -22,13 +24,22 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret string) http.Han
 
 		form, _ := url.ParseQuery(string(body))
 		hasAuthHeader := r.Header.Get("Authorization") != ""
-		log.Printf("token proxy: grant=%s client_id=%q has_secret_in_body=%t has_basic_auth=%t has_code_verifier=%t redirect_uri=%q",
+
+		code := form.Get("code")
+		verifier := form.Get("code_verifier")
+		var derivedChallenge string
+		if verifier != "" {
+			sum := sha256.Sum256([]byte(verifier))
+			derivedChallenge = base64.RawURLEncoding.EncodeToString(sum[:])
+		}
+		log.Printf("token proxy: grant=%s client_id=%q has_secret_in_body=%t has_basic_auth=%t redirect_uri=%q code=%.12s... derived_challenge=%s",
 			form.Get("grant_type"),
 			form.Get("client_id"),
 			form.Get("client_secret") != "",
 			hasAuthHeader,
-			form.Get("code_verifier") != "",
 			form.Get("redirect_uri"),
+			code,
+			derivedChallenge,
 		)
 
 		// Cognito's app client is confidential; if the client didn't send the
