@@ -33,6 +33,7 @@ type AuthServerMetadata struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
+	RegistrationEndpoint              string   `json:"registration_endpoint"`
 	JwksURI                           string   `json:"jwks_uri"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
@@ -77,6 +78,7 @@ func NewAuthServerMetadataHandler(ctx context.Context, resource, issuer string) 
 		Issuer:                            resource,
 		AuthorizationEndpoint:             cfg.AuthorizationEndpoint,
 		TokenEndpoint:                     cfg.TokenEndpoint,
+		RegistrationEndpoint:              resource + "/register",
 		JwksURI:                           cfg.JwksURI,
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},

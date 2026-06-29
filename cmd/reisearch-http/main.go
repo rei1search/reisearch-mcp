@@ -17,6 +17,8 @@ func main() {
 	baseURL := os.Getenv("REISEARCH_PUB_URL")
 	resource := os.Getenv("MCP_RESOURCE_URL")
 	issuer := os.Getenv("COGNITO_ISSUER")
+	clientID := os.Getenv("OAUTH_CLIENT_ID")
+	clientSecret := os.Getenv("OAUTH_CLIENT_SECRET")
 
 	if baseURL == "" {
 		log.Fatal("Public URL is empty or not defined, Quitting!")
@@ -26,6 +28,9 @@ func main() {
 	}
 	if issuer == "" {
 		log.Fatal("issuer is empty or not defined, Quitting!")
+	}
+	if clientID == "" {
+		log.Fatal("OAUTH_CLIENT_ID is empty or not defined, Quitting!")
 	}
 
 	metadataURL := resource + "/.well-known/oauth-protected-resource"
@@ -51,6 +56,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource))
 	mux.Handle("/.well-known/oauth-authorization-server", asHandler)
+	mux.Handle("/register", oauth.NewRegistrationHandler(clientID, clientSecret))
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
 
