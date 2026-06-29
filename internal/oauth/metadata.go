@@ -75,8 +75,11 @@ func NewAuthServerMetadataHandler(ctx context.Context, resource, issuer string) 
 	}
 
 	metadata := AuthServerMetadata{
-		Issuer:                            resource,
-		AuthorizationEndpoint:             cfg.AuthorizationEndpoint,
+		// issuer must equal the iss claim Cognito stamps on its tokens, or
+		// clients reject the tokens after exchange. We still serve this doc
+		// (and the registration_endpoint) from our own domain.
+		Issuer:                issuer,
+		AuthorizationEndpoint: cfg.AuthorizationEndpoint,
 		TokenEndpoint:                     cfg.TokenEndpoint,
 		RegistrationEndpoint:              resource + "/register",
 		JwksURI:                           cfg.JwksURI,
