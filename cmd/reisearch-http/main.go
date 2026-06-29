@@ -44,9 +44,19 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource, issuer))
-	mux.Handle("/", bearer.Wrap(handler))
+	mux.Handle("/mcp", bearer.Wrap(handler))
+	mux.HandleFunc("/", welcome)
 
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := http.ListenAndServe(":4479", mux); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func welcome(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("Welcome to ReiSearch MCP server"))
 }

@@ -1,0 +1,14 @@
+services:
+
+  mcp:
+    container_name: reisearch-mcp
+    env_file:
+      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4479:4479"
+    environment:
+      - ENV=development
+    restart: unless-stopped

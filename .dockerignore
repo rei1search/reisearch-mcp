@@ -1,0 +1,19 @@
+# Secrets / local env — inject at runtime via compose env_file
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Stray/accidental files
+/-
+
+# Built binaries
+/reisearch-http
+*.exe
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore
