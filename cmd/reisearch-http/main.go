@@ -59,6 +59,8 @@ func main() {
 	mux.Handle("/register", oauth.NewRegistrationHandler(clientID, clientSecret))
 	mux.Handle("/authorize", oauth.NewAuthorizeProxyHandler(cfg.AuthorizationEndpoint))
 	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret))
+	mux.Handle("/testlogin", oauth.NewDiagLoginHandler(resource, clientID, cfg.AuthorizationEndpoint))
+	mux.Handle("/callback", oauth.NewDiagCallbackHandler(resource, clientID, clientSecret, cfg.TokenEndpoint))
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
 
