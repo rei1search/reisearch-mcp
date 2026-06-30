@@ -43,8 +43,19 @@ func (s *RedirectStore) take(state string) (string, bool) {
 // /callback and forwards every query parameter on to the client's real
 // redirect_uri, which we looked up by state. This lets Cognito keep a single
 // stable callback registered while still returning the code to ChatGPT/Claude.
-func NewCallbackRelayHandler(store *RedirectStore) http.HandlerFunc {
+//
+// When diag is non-nil (ENABLE_TESTLOGIN), /callback first checks whether the
+// state belongs to a /testlogin flow and, if so, completes that flow here
+// instead of relaying. diag may be nil in production, in which case /callback
+// only relays.
+func NewCallbackRelayHandler(store *RedirectStore, diag *DiagFlows) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// A /testlogin flow reuses this same callback (Cognito only allows one).
+		// If the state is one of ours, complete it here and stop.
+		if diag != nil && diag.TryCallback(w, r) {
+			return
+		}
+
 		state := r.URL.Query().Get("state")
 		clientRedirect, ok := store.take(state)
 		if !ok {

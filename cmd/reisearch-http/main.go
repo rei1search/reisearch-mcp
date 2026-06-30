@@ -55,6 +55,15 @@ func main() {
 
 	redirects := oauth.NewRedirectStore()
 
+	// /testlogin is a developer-only harness that mints a real Cognito access
+	// token via a browser PKCE flow, for testing /mcp and the backend. It's off
+	// unless ENABLE_TESTLOGIN=1, so it can never be reached in production.
+	var diag *oauth.DiagFlows
+	if os.Getenv("ENABLE_TESTLOGIN") == "1" {
+		diag = oauth.NewDiagFlows(resource, clientID, clientSecret, cfg.AuthorizationEndpoint)
+		log.Printf("reisearch-mcp: /testlogin ENABLED (dev token harness)")
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource))
 	mux.Handle("/.well-known/oauth-authorization-server", oauth.NewAuthServerMetadataHandler(resource, issuer, cfg))
@@ -63,9 +72,12 @@ func main() {
 	mux.Handle("/register", oauth.NewRegistrationHandler(clientID))
 	mux.Handle("/authorize", oauth.NewAuthorizeProxyHandler(cfg.AuthorizationEndpoint, resource, redirects))
 	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret, resource))
-	mux.Handle("/callback", oauth.NewCallbackRelayHandler(redirects))
+	mux.Handle("/callback", oauth.NewCallbackRelayHandler(redirects, diag))
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
+	if diag != nil {
+		mux.Handle("/testlogin", diag.LoginHandler())
+	}
 
 	log.Printf("reisearch-mcp config: resource=%s issuer=%s api=%s", resource, issuer, baseURL)
 	log.Printf("reisearch-mcp listening on :4479")
