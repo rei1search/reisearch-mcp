@@ -53,16 +53,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	redirects := oauth.NewRedirectStore()
+
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource))
 	mux.Handle("/.well-known/oauth-authorization-server", oauth.NewAuthServerMetadataHandler(resource, issuer, cfg))
 	mux.Handle("/.well-known/openid-configuration", oauth.NewOpenIDConfigHandler(resource))
 	mux.Handle("/jwks", oauth.NewJWKSProxyHandler(cfg.JwksURI))
 	mux.Handle("/register", oauth.NewRegistrationHandler(clientID, clientSecret))
-	mux.Handle("/authorize", oauth.NewAuthorizeProxyHandler(cfg.AuthorizationEndpoint))
-	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret))
-	mux.Handle("/testlogin", oauth.NewDiagLoginHandler(resource, clientID, cfg.AuthorizationEndpoint))
-	mux.Handle("/callback", oauth.NewDiagCallbackHandler(resource, clientID, clientSecret, cfg.TokenEndpoint))
+	mux.Handle("/authorize", oauth.NewAuthorizeProxyHandler(cfg.AuthorizationEndpoint, resource, redirects))
+	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret, resource))
+	mux.Handle("/callback", oauth.NewCallbackRelayHandler(redirects))
 	mux.Handle("/mcp", bearer.Wrap(handler))
 	mux.HandleFunc("/", welcome)
 

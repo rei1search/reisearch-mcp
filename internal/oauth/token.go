@@ -30,7 +30,7 @@ type cachedToken struct {
 // It also (a) logs what the client sends and what Cognito returns, and (b)
 // injects the client_secret when the client runs a PKCE-only (public) exchange
 // but the Cognito app client requires a secret.
-func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret string) http.HandlerFunc {
+func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string) http.HandlerFunc {
 	var (
 		mu    sync.Mutex
 		cache = map[string]cachedToken{}
@@ -45,6 +45,14 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret string) http.Han
 
 		form, _ := url.ParseQuery(string(body))
 		hasAuthHeader := r.Header.Get("Authorization") != ""
+
+		// The code was bound to our own /callback at authorize (see the
+		// authorize proxy), so redeem with that exact value. The client sends
+		// its own redirect_uri (e.g. chatgpt.com/...), which would mismatch and
+		// make Cognito return invalid_grant.
+		if form.Get("grant_type") == "authorization_code" {
+			form.Set("redirect_uri", resource+"/callback")
+		}
 
 		code := form.Get("code")
 		verifier := form.Get("code_verifier")

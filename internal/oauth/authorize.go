@@ -5,27 +5,33 @@ import (
 	"net/http"
 )
 
-// NewAuthorizeProxyHandler logs the authorization request parameters and then
-// redirects the browser to Cognito's real authorize endpoint, preserving the
-// query string verbatim. It exists to compare the redirect_uri / code_challenge
-// sent at authorize against what arrives at the token exchange, so we can
-// diagnose invalid_grant failures.
-func NewAuthorizeProxyHandler(authorizeEndpoint string) http.HandlerFunc {
+// NewAuthorizeProxyHandler rewrites the client's redirect_uri to our own
+// /callback before forwarding to Cognito, and remembers the client's original
+// redirect_uri keyed by state so the /callback relay can return the code to it.
+//
+// Cognito binds the authorization code to whatever redirect_uri it sees at
+// authorize, and rejects the token exchange (invalid_grant) unless the same
+// value comes back. By pinning every flow to our own /callback we (a) only ever
+// register one stable callback with Cognito, and (b) redeem with the exact
+// redirect_uri we control end-to-end.
+func NewAuthorizeProxyHandler(authorizeEndpoint, resource string, store *RedirectStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		log.Printf("authorize proxy: client_id=%q response_type=%q redirect_uri=%q code_challenge=%q code_challenge_method=%q scope=%q",
+		clientRedirect := q.Get("redirect_uri")
+		state := q.Get("state")
+
+		store.save(state, clientRedirect)
+		q.Set("redirect_uri", resource+"/callback")
+
+		log.Printf("authorize proxy: client_id=%q response_type=%q client_redirect=%q rewritten_redirect=%q state=%q code_challenge=%q",
 			q.Get("client_id"),
 			q.Get("response_type"),
-			q.Get("redirect_uri"),
+			clientRedirect,
+			resource+"/callback",
+			state,
 			q.Get("code_challenge"),
-			q.Get("code_challenge_method"),
-			q.Get("scope"),
 		)
 
-		target := authorizeEndpoint
-		if raw := r.URL.RawQuery; raw != "" {
-			target += "?" + raw
-		}
-		http.Redirect(w, r, target, http.StatusFound)
+		http.Redirect(w, r, authorizeEndpoint+"?"+q.Encode(), http.StatusFound)
 	}
 }
