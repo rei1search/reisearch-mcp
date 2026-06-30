@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -17,6 +19,29 @@ type cachedToken struct {
 	status      int
 	contentType string
 	body        []byte
+}
+
+// redactForm renders a token form for logging, sorting keys for stable diffs
+// and masking secret material so we never log it.
+func redactForm(form url.Values) string {
+	keys := make([]string, 0, len(form))
+	for k := range form {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := strings.Join(form[k], ",")
+		switch k {
+		case "client_secret", "client_assertion":
+			if v != "" {
+				v = "[redacted len=" + strconv.Itoa(len(v)) + "]"
+			}
+		}
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, " ")
 }
 
 // NewTokenProxyHandler forwards the authorization-code exchange to Cognito.
@@ -45,6 +70,8 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 
 		form, _ := url.ParseQuery(string(body))
 		hasAuthHeader := r.Header.Get("Authorization") != ""
+
+		log.Printf("token proxy: client body fields: %s", redactForm(form))
 
 		// The code was bound to our own /callback at authorize (see the
 		// authorize proxy), so redeem with that exact value. The client sends
@@ -94,6 +121,8 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 			}
 			form.Set("client_secret", clientSecret)
 		}
+
+		log.Printf("token proxy: cognito request fields: %s", redactForm(form))
 
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, tokenEndpoint, strings.NewReader(form.Encode()))
 		if err != nil {
