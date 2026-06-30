@@ -53,8 +53,19 @@ func NewDiagLoginHandler(resource, clientID, authorizeEndpoint string) http.Hand
 	}
 }
 
-// NewDiagCallbackHandler exchanges the code from the self-contained flow and
-// renders Cognito's raw response.
+// NewDiagCallbackHandler exchanges the code from the self-contained flow by
+// redeeming it through OUR OWN /token proxy — exactly the path a real MCP
+// client takes — instead of hitting Cognito directly. It redeems TWICE so we
+// can see how the proxy's idempotency cache handles a duplicate redemption of
+// the single-use code (attempt #2 should replay attempt #1, not invalid_grant).
+//
+// This is the decisive end-to-end test of the proxy: if attempt #1 returns 200,
+// the proxy path is sound and any client failure must be something spending the
+// code before our /token sees it; if attempt #1 returns invalid_grant, the bug
+// is in our proxy itself.
+//
+// Note: clientSecret/tokenEndpoint are intentionally unused now — our /token
+// proxy injects the secret and forwards to Cognito on our behalf.
 func NewDiagCallbackHandler(resource, clientID, clientSecret, tokenEndpoint string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -76,25 +87,30 @@ func NewDiagCallbackHandler(resource, clientID, clientSecret, tokenEndpoint stri
 			return
 		}
 
+		// Build the exchange exactly as a public PKCE client would: NO
+		// client_secret in the body. Our /token proxy is responsible for
+		// injecting the confidential client's secret before reaching Cognito.
 		form := url.Values{}
 		form.Set("grant_type", "authorization_code")
 		form.Set("client_id", clientID)
-		if clientSecret != "" {
-			form.Set("client_secret", clientSecret)
-		}
 		form.Set("code", code)
 		form.Set("code_verifier", verifier)
 		form.Set("redirect_uri", resource+"/callback")
 
-		resp, err := http.Post(tokenEndpoint, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
-		if err != nil {
-			fmt.Fprintf(w, "exchange request failed: %v", err)
-			return
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		proxyTokenURL := resource + "/token"
 
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "token exchange status=%d\n\n%s", resp.StatusCode, string(body))
+		fmt.Fprintf(w, "redeeming code=%.12s... through proxy %s\n\n", code, proxyTokenURL)
+
+		for attempt := 1; attempt <= 2; attempt++ {
+			resp, err := http.Post(proxyTokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+			if err != nil {
+				fmt.Fprintf(w, "=== attempt %d: request failed: %v ===\n\n", attempt, err)
+				continue
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			fmt.Fprintf(w, "=== attempt %d: status=%d ===\n%s\n\n", attempt, resp.StatusCode, string(body))
+		}
 	}
 }
