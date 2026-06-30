@@ -23,6 +23,11 @@ func NewAuthorizeProxyHandler(authorizeEndpoint, resource string, store *Redirec
 		store.save(state, clientRedirect)
 		q.Set("redirect_uri", resource+"/callback")
 
+		// Cognito does not support RFC 8707 Resource Indicators; a forwarded
+		// `resource` parameter makes it reject the later token exchange with
+		// invalid_grant. Strip it so the code is never bound to it.
+		q.Del("resource")
+
 		log.Printf("authorize proxy: client_id=%q response_type=%q client_redirect=%q rewritten_redirect=%q state=%q code_challenge=%q",
 			q.Get("client_id"),
 			q.Get("response_type"),

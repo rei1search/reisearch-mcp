@@ -73,6 +73,11 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 
 		log.Printf("token proxy: client body fields: %s", redactForm(form))
 
+		// Cognito does not support RFC 8707 Resource Indicators. Clients like
+		// ChatGPT send a `resource` parameter, which Cognito rejects with
+		// invalid_grant. Strip it before forwarding.
+		form.Del("resource")
+
 		// The code was bound to our own /callback at authorize (see the
 		// authorize proxy), so redeem with that exact value. The client sends
 		// its own redirect_uri (e.g. chatgpt.com/...), which would mismatch and
