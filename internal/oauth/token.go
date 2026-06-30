@@ -1,14 +1,10 @@
 package oauth
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -21,40 +17,16 @@ type cachedToken struct {
 	body        []byte
 }
 
-// redactForm renders a token form for logging, sorting keys for stable diffs
-// and masking secret material so we never log it.
-func redactForm(form url.Values) string {
-	keys := make([]string, 0, len(form))
-	for k := range form {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		v := strings.Join(form[k], ",")
-		switch k {
-		case "client_secret", "client_assertion":
-			if v != "" {
-				v = "[redacted len=" + strconv.Itoa(len(v)) + "]"
-			}
-		}
-		parts = append(parts, k+"="+v)
-	}
-	return strings.Join(parts, " ")
-}
-
 // NewTokenProxyHandler forwards the authorization-code exchange to Cognito.
 //
-// MCP clients (Claude.ai) redeem the single-use authorization code more than
-// once. Cognito rejects the second redemption with invalid_grant, which the
-// client treats as fatal. To absorb that, we cache the first successful
-// response keyed by the code and replay it for any later redemption of the
-// same code instead of forwarding the now-spent code to Cognito.
+// MCP clients redeem the single-use authorization code more than once. Cognito
+// rejects the second redemption with invalid_grant, which the client treats as
+// fatal. To absorb that, we cache the first successful response keyed by the
+// code and replay it for any later redemption of the same code.
 //
-// It also (a) logs what the client sends and what Cognito returns, and (b)
-// injects the client_secret when the client runs a PKCE-only (public) exchange
-// but the Cognito app client requires a secret.
+// It also (a) strips parameters Cognito rejects, (b) pins redirect_uri to our
+// own /callback (the value the code was bound to), and (c) injects the
+// client_secret for public PKCE clients that don't send one.
 func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string) http.HandlerFunc {
 	var (
 		mu    sync.Mutex
@@ -71,8 +43,6 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 		form, _ := url.ParseQuery(string(body))
 		hasAuthHeader := r.Header.Get("Authorization") != ""
 
-		log.Printf("token proxy: client body fields: %s", redactForm(form))
-
 		// Cognito does not support RFC 8707 Resource Indicators. Clients like
 		// ChatGPT send a `resource` parameter, which Cognito rejects with
 		// invalid_grant. Strip it before forwarding.
@@ -87,21 +57,6 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 		}
 
 		code := form.Get("code")
-		verifier := form.Get("code_verifier")
-		var derivedChallenge string
-		if verifier != "" {
-			sum := sha256.Sum256([]byte(verifier))
-			derivedChallenge = base64.RawURLEncoding.EncodeToString(sum[:])
-		}
-		log.Printf("token proxy: grant=%s client_id=%q has_secret_in_body=%t has_basic_auth=%t redirect_uri=%q code=%.12s... derived_challenge=%s",
-			form.Get("grant_type"),
-			form.Get("client_id"),
-			form.Get("client_secret") != "",
-			hasAuthHeader,
-			form.Get("redirect_uri"),
-			code,
-			derivedChallenge,
-		)
 
 		// Serialize redemptions of the same code so a duplicate either waits for
 		// or replays the first result rather than racing it.
@@ -110,7 +65,6 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 
 		if code != "" {
 			if cached, ok := cache[code]; ok {
-				log.Printf("token proxy: replaying cached response for code=%.12s...", code)
 				w.Header().Set("Content-Type", cached.contentType)
 				w.WriteHeader(cached.status)
 				w.Write(cached.body)
@@ -126,8 +80,6 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 			}
 			form.Set("client_secret", clientSecret)
 		}
-
-		log.Printf("token proxy: cognito request fields: %s", redactForm(form))
 
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, tokenEndpoint, strings.NewReader(form.Encode()))
 		if err != nil {
@@ -147,7 +99,10 @@ func NewTokenProxyHandler(tokenEndpoint, clientID, clientSecret, resource string
 		defer resp.Body.Close()
 
 		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("token proxy: cognito status=%d body=%s", resp.StatusCode, string(respBody))
+		// Don't log successful bodies; they contain access/refresh tokens.
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("token proxy: cognito status=%d body=%s", resp.StatusCode, string(respBody))
+		}
 
 		contentType := resp.Header.Get("Content-Type")
 		if code != "" && resp.StatusCode == http.StatusOK {

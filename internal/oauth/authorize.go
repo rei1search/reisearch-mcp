@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"log"
 	"net/http"
 )
 
@@ -27,15 +26,6 @@ func NewAuthorizeProxyHandler(authorizeEndpoint, resource string, store *Redirec
 		// `resource` parameter makes it reject the later token exchange with
 		// invalid_grant. Strip it so the code is never bound to it.
 		q.Del("resource")
-
-		log.Printf("authorize proxy: client_id=%q response_type=%q client_redirect=%q rewritten_redirect=%q state=%q code_challenge=%q",
-			q.Get("client_id"),
-			q.Get("response_type"),
-			clientRedirect,
-			resource+"/callback",
-			state,
-			q.Get("code_challenge"),
-		)
 
 		http.Redirect(w, r, authorizeEndpoint+"?"+q.Encode(), http.StatusFound)
 	}
