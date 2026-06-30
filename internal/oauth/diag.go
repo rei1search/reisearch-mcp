@@ -17,9 +17,16 @@ import (
 // /callback exchanges the code, so we can tell whether Cognito itself can
 // complete authorize -> token for this app client.
 
+// diagFlow records the per-state PKCE verifier plus the toggles chosen at
+// /testlogin, so /callback can replicate a real client's exact exchange.
+type diagFlow struct {
+	verifier  string
+	useSecret bool // put client_secret in the token body (mimics ChatGPT/Claude)
+}
+
 var (
 	diagMu        sync.Mutex
-	diagVerifiers = map[string]string{}
+	diagVerifiers = map[string]diagFlow{}
 )
 
 func randString() string {
@@ -28,16 +35,23 @@ func randString() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// NewDiagLoginHandler starts the self-contained PKCE flow.
+// NewDiagLoginHandler starts the self-contained PKCE flow. Two query toggles
+// let us reproduce a real client's exact conditions:
+//   ?secret=1   -> /callback sends client_secret in the token body
+//   ?viaproxy=1 -> authorize is routed through our own /authorize proxy
+//                  instead of straight to Cognito
 func NewDiagLoginHandler(resource, clientID, authorizeEndpoint string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		useSecret := r.URL.Query().Get("secret") == "1"
+		viaProxy := r.URL.Query().Get("viaproxy") == "1"
+
 		state := randString()
 		verifier := randString()
 		sum := sha256.Sum256([]byte(verifier))
 		challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 
 		diagMu.Lock()
-		diagVerifiers[state] = verifier
+		diagVerifiers[state] = diagFlow{verifier: verifier, useSecret: useSecret}
 		diagMu.Unlock()
 
 		params := url.Values{}
@@ -49,7 +63,12 @@ func NewDiagLoginHandler(resource, clientID, authorizeEndpoint string) http.Hand
 		params.Set("code_challenge", challenge)
 		params.Set("code_challenge_method", "S256")
 
-		http.Redirect(w, r, authorizeEndpoint+"?"+params.Encode(), http.StatusFound)
+		authzBase := authorizeEndpoint
+		if viaProxy {
+			authzBase = resource + "/authorize"
+		}
+
+		http.Redirect(w, r, authzBase+"?"+params.Encode(), http.StatusFound)
 	}
 }
 
@@ -78,29 +97,29 @@ func NewDiagCallbackHandler(resource, clientID, clientSecret, tokenEndpoint stri
 		}
 
 		diagMu.Lock()
-		verifier := diagVerifiers[state]
+		flow, ok := diagVerifiers[state]
 		delete(diagVerifiers, state)
 		diagMu.Unlock()
 
-		if verifier == "" {
+		if !ok {
 			fmt.Fprintf(w, "no verifier for state %q (start at /testlogin)", state)
 			return
 		}
 
-		// Build the exchange exactly as a public PKCE client would: NO
-		// client_secret in the body. Our /token proxy is responsible for
-		// injecting the confidential client's secret before reaching Cognito.
 		form := url.Values{}
 		form.Set("grant_type", "authorization_code")
 		form.Set("client_id", clientID)
 		form.Set("code", code)
-		form.Set("code_verifier", verifier)
+		form.Set("code_verifier", flow.verifier)
 		form.Set("redirect_uri", resource+"/callback")
+		if flow.useSecret {
+			form.Set("client_secret", clientSecret)
+		}
 
 		proxyTokenURL := resource + "/token"
 
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "redeeming code=%.12s... through proxy %s\n\n", code, proxyTokenURL)
+		fmt.Fprintf(w, "redeeming code=%.12s... through proxy %s (secret_in_body=%t)\n\n", code, proxyTokenURL, flow.useSecret)
 
 		for attempt := 1; attempt <= 2; attempt++ {
 			resp, err := http.Post(proxyTokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
