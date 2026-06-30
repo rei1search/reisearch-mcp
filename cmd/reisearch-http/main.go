@@ -56,6 +56,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/.well-known/oauth-protected-resource", oauth.NewMetadataHandler(resource))
 	mux.Handle("/.well-known/oauth-authorization-server", oauth.NewAuthServerMetadataHandler(resource, issuer, cfg))
+	mux.Handle("/.well-known/openid-configuration", oauth.NewOpenIDConfigHandler(resource))
+	mux.Handle("/jwks", oauth.NewJWKSProxyHandler(cfg.JwksURI))
 	mux.Handle("/register", oauth.NewRegistrationHandler(clientID, clientSecret))
 	mux.Handle("/authorize", oauth.NewAuthorizeProxyHandler(cfg.AuthorizationEndpoint))
 	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret))

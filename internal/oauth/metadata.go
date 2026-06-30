@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -85,7 +86,11 @@ func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) ht
 		AuthorizationEndpoint:             resource + "/authorize",
 		TokenEndpoint:                     resource + "/token",
 		RegistrationEndpoint:              resource + "/register",
-		JwksURI:                           cfg.JwksURI,
+		// Point at our own JWKS proxy, not Cognito's host. Any reference to the
+		// Cognito domain in discovery lets a client derive Cognito's real token
+		// endpoint and redeem the single-use code there directly, bypassing our
+		// /token proxy and spending the code before our exchange runs.
+		JwksURI:                           resource + "/jwks",
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
@@ -99,5 +104,68 @@ func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) ht
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(metadata)
+	}
+}
+
+// OpenIDConfig mirrors our AuthServerMetadata as an OIDC discovery document.
+// Some clients fetch /.well-known/openid-configuration instead of (or in
+// addition to) oauth-authorization-server. If that 404s, they fall back to
+// deriving the issuer from our jwks_uri host and discover Cognito's real
+// endpoints. Serving our own doc keeps every endpoint pointed at us.
+type OpenIDConfig struct {
+	Issuer                            string   `json:"issuer"`
+	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
+	TokenEndpoint                     string   `json:"token_endpoint"`
+	RegistrationEndpoint              string   `json:"registration_endpoint"`
+	JwksURI                           string   `json:"jwks_uri"`
+	ResponseTypesSupported            []string `json:"response_types_supported"`
+	SubjectTypesSupported             []string `json:"subject_types_supported"`
+	IDTokenSigningAlgValuesSupported  []string `json:"id_token_signing_alg_values_supported"`
+	GrantTypesSupported               []string `json:"grant_types_supported"`
+	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	ScopesSupported                   []string `json:"scopes_supported"`
+}
+
+// NewOpenIDConfigHandler serves an OIDC discovery doc with every endpoint on
+// our own domain, so a client fetching openid-configuration never 404s into a
+// fallback that exposes Cognito's real endpoints.
+func NewOpenIDConfigHandler(resource string) http.HandlerFunc {
+	cfg := OpenIDConfig{
+		Issuer:                            resource,
+		AuthorizationEndpoint:             resource + "/authorize",
+		TokenEndpoint:                     resource + "/token",
+		RegistrationEndpoint:              resource + "/register",
+		JwksURI:                           resource + "/jwks",
+		ResponseTypesSupported:            []string{"code"},
+		SubjectTypesSupported:             []string{"public"},
+		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
+		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
+		CodeChallengeMethodsSupported:     []string{"S256"},
+		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
+		ScopesSupported:                   []string{"openid", "email", "phone"},
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfg)
+	}
+}
+
+// NewJWKSProxyHandler fetches Cognito's JWKS and serves it from our own domain,
+// so no discovery document ever references the Cognito host. This closes the
+// only remaining path by which a client could find Cognito's real endpoints and
+// redeem the single-use authorization code directly, bypassing our /token.
+func NewJWKSProxyHandler(cognitoJwksURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp, err := http.Get(cognitoJwksURL)
+		if err != nil {
+			http.Error(w, "fetch jwks", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(body)
 	}
 }
