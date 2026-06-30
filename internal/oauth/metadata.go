@@ -94,7 +94,10 @@ func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) ht
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
-		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
+		// Public PKCE only: clients send no secret and our /token proxy injects
+		// the confidential Cognito secret server-side. Advertising client_secret_*
+		// would invite clients into a confidential exchange we don't want them to run.
+		TokenEndpointAuthMethodsSupported: []string{"none"},
 		// We advertise the scopes the app client allows, not the pool's full
 		// list. The pool also lists "profile", but the app client does not
 		// enable it, so requesting it makes Cognito reject the authorize.
@@ -142,7 +145,7 @@ func NewOpenIDConfigHandler(resource string) http.HandlerFunc {
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
-		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
+		TokenEndpointAuthMethodsSupported: []string{"none"},
 		ScopesSupported:                   []string{"openid", "email", "phone"},
 	}
 	return func(w http.ResponseWriter, r *http.Request) {

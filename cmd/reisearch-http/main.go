@@ -60,7 +60,7 @@ func main() {
 	mux.Handle("/.well-known/oauth-authorization-server", oauth.NewAuthServerMetadataHandler(resource, issuer, cfg))
 	mux.Handle("/.well-known/openid-configuration", oauth.NewOpenIDConfigHandler(resource))
 	mux.Handle("/jwks", oauth.NewJWKSProxyHandler(cfg.JwksURI))
-	mux.Handle("/register", oauth.NewRegistrationHandler(clientID, clientSecret))
+	mux.Handle("/register", oauth.NewRegistrationHandler(clientID))
 	mux.Handle("/authorize", oauth.NewAuthorizeProxyHandler(cfg.AuthorizationEndpoint, resource, redirects))
 	mux.Handle("/token", oauth.NewTokenProxyHandler(cfg.TokenEndpoint, clientID, clientSecret, resource))
 	mux.Handle("/callback", oauth.NewCallbackRelayHandler(redirects))
