@@ -82,18 +82,18 @@ func NewAuthServerMetadataHandler(resource, issuer string, cfg CognitoConfig) ht
 		// endpoints. If we advertised Cognito's issuer, the client does its own
 		// OIDC discovery on Cognito and redeems the single-use code directly
 		// there (bypassing our /token), causing a duplicate redemption.
-		Issuer:                            resource,
-		AuthorizationEndpoint:             resource + "/authorize",
-		TokenEndpoint:                     resource + "/token",
-		RegistrationEndpoint:              resource + "/register",
+		Issuer:                resource,
+		AuthorizationEndpoint: resource + "/authorize",
+		TokenEndpoint:         resource + "/token",
+		RegistrationEndpoint:  resource + "/register",
 		// Point at our own JWKS proxy, not Cognito's host. Any reference to the
 		// Cognito domain in discovery lets a client derive Cognito's real token
 		// endpoint and redeem the single-use code there directly, bypassing our
 		// /token proxy and spending the code before our exchange runs.
-		JwksURI:                           resource + "/jwks",
-		ResponseTypesSupported:            []string{"code"},
-		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
-		CodeChallengeMethodsSupported:     []string{"S256"},
+		JwksURI:                       resource + "/jwks",
+		ResponseTypesSupported:        []string{"code"},
+		GrantTypesSupported:           []string{"authorization_code", "refresh_token"},
+		CodeChallengeMethodsSupported: []string{"S256"},
 		// Public PKCE only: clients send no secret and our /token proxy injects
 		// the confidential Cognito secret server-side. Advertising client_secret_*
 		// would invite clients into a confidential exchange we don't want them to run.
