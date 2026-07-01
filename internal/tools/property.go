@@ -24,6 +24,10 @@ type GetNotesInput struct {
 	Cursor     string `json:"cursor,omitempty"`
 }
 
+type GetPropertyDetailsInput struct {
+	PropertyID string `json:"propertyID"`
+}
+
 func (h *PropertyHandler) CreateProperty(ctx context.Context, req *mcp.CallToolRequest, input reisearch.CreatePropertyRequest) (*mcp.CallToolResult, *reisearch.Property, error) {
 	token := TokenFromContext(ctx)
 	property, err := h.client.CreateProperty(ctx, token, input)
@@ -55,10 +59,20 @@ func (h *PropertyHandler) GetNotes(ctx context.Context, req *mcp.CallToolRequest
 	return nil, page, nil
 }
 
+func (h *PropertyHandler) GetPropertyDetails(ctx context.Context, req *mcp.CallToolRequest, input GetPropertyDetailsInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+	details, err := h.client.GetPropertyDetails(ctx, token, input.PropertyID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, details, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
 	mcp.AddTool(server, &mcp.Tool{Name: "add_note_for_property", Description: "Adds a note to a property, requires a property id to be passed"}, h.CreateNote)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_notes_for_property", Description: "List notes on a property (paginated). Requires a property id; optional limit and cursor for paging."}, h.GetNotes)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_property_details", Description: "Get a property's full details (core info + deal structure). Requires a property id."}, h.GetPropertyDetails)
 
 }

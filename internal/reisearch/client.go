@@ -180,6 +180,47 @@ func (c *Client) GetNotes(ctx context.Context, token, propertyID, cursor string,
 	return &parsed.Data, nil
 }
 
+type getPropertyDetailsResponse struct {
+	Success bool                   `json:"success"`
+	Message string                 `json:"message"`
+	Data    map[string]interface{} `json:"data"`
+}
+
+// GetPropertyDetails fetches a property's full core + deal-structure payload.
+// The backend "data" is a large, deeply-nested object ({property_detail,
+// deal_structure}), so we pass it through as a generic map rather than
+// mirroring ~25+ backend model types.
+func (c *Client) GetPropertyDetails(ctx context.Context, token, propertyID string) (map[string]interface{}, error) {
+	requrl := c.baseURL + "/connect/v1/property/details/" + url.PathEscape(propertyID)
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get property details failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed getPropertyDetailsResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
 func (c *Client) CreateProperty(ctx context.Context, token string, req CreatePropertyRequest) (*Property, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
