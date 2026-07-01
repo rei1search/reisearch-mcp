@@ -35,6 +35,11 @@ type GetPropertyListInput struct {
 	LastKey   string `json:"lastKey,omitempty"`
 }
 
+type GetCompsInput struct {
+	PropertyID string `json:"propertyID"`
+	CompType   string `json:"compType"`
+}
+
 func (h *PropertyHandler) CreateProperty(ctx context.Context, req *mcp.CallToolRequest, input reisearch.CreatePropertyRequest) (*mcp.CallToolResult, *reisearch.Property, error) {
 	token := TokenFromContext(ctx)
 	property, err := h.client.CreateProperty(ctx, token, input)
@@ -84,6 +89,15 @@ func (h *PropertyHandler) GetPropertyList(ctx context.Context, req *mcp.CallTool
 	return nil, page, nil
 }
 
+func (h *PropertyHandler) GetComps(ctx context.Context, req *mcp.CallToolRequest, input GetCompsInput) (*mcp.CallToolResult, *reisearch.CompsResult, error) {
+	token := TokenFromContext(ctx)
+	result, err := h.client.GetComps(ctx, token, input.PropertyID, input.CompType)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -91,5 +105,6 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_notes_for_property", Description: "List notes on a property (paginated). Requires a property id; optional limit and cursor for paging."}, h.GetNotes)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_details", Description: "Get a property's full details (core info + deal structure). Requires a property id."}, h.GetPropertyDetails)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_list", Description: "List all properties the current user has access to — i.e. their property dashboard/list view, including both properties they created and properties shared with them (paginated). This is the list-view companion to get_property_details. Optional filters: ownership ('mine' for properties the user created, 'shared' for ones shared with them; omit for both); status to filter by stage, one of 'draft', 'published', 'archived', 'deleted' (omit for all); limit to cap results (default 10). Pass lastKey (from a previous response) to fetch the next page."}, h.GetPropertyList)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_comps", Description: "Read the comparable properties ('comps') for a property under a given exit strategy. Requires propertyID and compType (the exit strategy / comparison basis, e.g. 'sold', 'rental', 'affordable_housing'). If the user hasn't said which exit strategy they want, ASK them before calling — do not guess. The result has a 'status': 'ready' (comps available), 'in_progress' (still generating — comps may already be partially populated, so show what's there and suggest checking back shortly), 'no_comps_yet' (never run for this property/strategy — offer to run comps but do NOT run them without the user's confirmation, since running comps is billed), 'no_results', 'failed', or 'cancelled'. Always relay the human-readable 'message'."}, h.GetComps)
 
 }

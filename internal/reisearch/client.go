@@ -108,6 +108,25 @@ type getSharedPropertiesResponse struct {
 	} `json:"data"`
 }
 
+// CompsResult is the tool-output shape for the comps read endpoint. The read
+// always succeeds at the HTTP level; Status ("ready", "in_progress",
+// "no_comps_yet", "no_results", "failed", "cancelled") and Message describe the
+// actual state. Comps may already carry results even while Status is
+// "in_progress", because workers save each comp as it finishes. Each comp is
+// passed through as a generic map (the backend emits a dynamic near-full
+// passthrough of its comp model minus internal-only fields).
+type CompsResult struct {
+	Status  string                   `json:"status"`
+	Message string                   `json:"message"`
+	Comps   []map[string]interface{} `json:"comps"`
+}
+
+type getCompsResponse struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message"`
+	Data    CompsResult `json:"data"`
+}
+
 func NewClient(baseUrl string) *Client {
 	return &Client{
 		baseURL:    baseUrl,
@@ -265,6 +284,46 @@ func (c *Client) GetSharedProperties(ctx context.Context, token string, limit in
 		Properties: parsed.Data.Data,
 		LastKey:    parsed.Data.LastKey,
 	}, nil
+}
+
+// GetComps reads the latest comp report for a property under a given comp type
+// (exit strategy, e.g. "sold", "rental"). Both propertyID and compType are
+// required by the backend. The call returns HTTP 200 regardless of state; the
+// caller inspects CompsResult.Status to know what actually happened.
+func (c *Client) GetComps(ctx context.Context, token, propertyID, compType string) (*CompsResult, error) {
+	q := url.Values{}
+	q.Set("propertyId", propertyID)
+	q.Set("compType", compType)
+
+	requrl := c.baseURL + "/connect/v1/comps?" + q.Encode()
+
+	// GET has no body.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get comps failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed getCompsResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &parsed.Data, nil
 }
 
 func (c *Client) GetPropertyDetails(ctx context.Context, token, propertyID string) (map[string]interface{}, error) {
