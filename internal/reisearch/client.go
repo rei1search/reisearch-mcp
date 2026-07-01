@@ -86,6 +86,28 @@ type getNotesResponse struct {
 	Data    NotesPage `json:"data"`
 }
 
+// SharedPropertiesPage is the tool-output shape for the property list endpoint:
+// a batch of shared-property records (each carrying its full nested property)
+// plus an opaque cursor for the next page (empty when there are no more). Each
+// item is passed through as a generic map rather than mirroring the large,
+// deeply-nested backend property model.
+type SharedPropertiesPage struct {
+	Properties []map[string]interface{} `json:"properties"`
+	LastKey    string                   `json:"lastKey"`
+}
+
+// getSharedPropertiesResponse mirrors the backend's actual envelope, which
+// double-nests: the standard {success, message, data} wrapper, whose "data" is
+// itself {"data": [...items...], "lastKey": "<cursor>"}.
+type getSharedPropertiesResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Data    struct {
+		Data    []map[string]interface{} `json:"data"`
+		LastKey string                   `json:"lastKey"`
+	} `json:"data"`
+}
+
 func NewClient(baseUrl string) *Client {
 	return &Client{
 		baseURL:    baseUrl,
@@ -190,6 +212,61 @@ type getPropertyDetailsResponse struct {
 // The backend "data" is a large, deeply-nested object ({property_detail,
 // deal_structure}), so we pass it through as a generic map rather than
 // mirroring ~25+ backend model types.
+func (c *Client) GetSharedProperties(ctx context.Context, token string, limit int, ownership, status, lastKey string) (*SharedPropertiesPage, error) {
+	// Only send params the caller actually provided; the backend defaults
+	// limit to 10 on its own.
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if ownership != "" {
+		q.Set("ownership", ownership)
+	}
+	if status != "" {
+		q.Set("status", status)
+	}
+	if lastKey != "" {
+		q.Set("lastKey", lastKey)
+	}
+
+	requrl := c.baseURL + "/connect/v1/property/list"
+	if encoded := q.Encode(); encoded != "" {
+		requrl += "?" + encoded
+	}
+
+	// GET has no body.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get shared properties failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	// decode the double-nested envelope, then flatten into the clean page shape
+	var parsed getSharedPropertiesResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &SharedPropertiesPage{
+		Properties: parsed.Data.Data,
+		LastKey:    parsed.Data.LastKey,
+	}, nil
+}
+
 func (c *Client) GetPropertyDetails(ctx context.Context, token, propertyID string) (map[string]interface{}, error) {
 	requrl := c.baseURL + "/connect/v1/property/details/" + url.PathEscape(propertyID)
 
