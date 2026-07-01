@@ -127,6 +127,50 @@ type getCompsResponse struct {
 	Data    CompsResult `json:"data"`
 }
 
+// CompSubject is the property we want comps generated for. PropertyID and
+// Address are the only fields the backend requires; the rest refine matching.
+// Latitude/Longitude are float64 here (the comps API wants numbers), even though
+// the stored property record keeps lat/long as strings.
+type CompSubject struct {
+	PropertyID string  `json:"propertyId"`
+	Address    string  `json:"address"`
+	City       string  `json:"city,omitempty"`
+	State      string  `json:"state,omitempty"`
+	ZipCode    string  `json:"zipCode,omitempty"`
+	Latitude   float64 `json:"latitude,omitempty"`
+	Longitude  float64 `json:"longitude,omitempty"`
+	Bedrooms   string  `json:"bedrooms,omitempty"`
+	Bathrooms  string  `json:"bathrooms,omitempty"`
+}
+
+// RunCompsRequest is the POST /run-comps body. One run covers all exit
+// strategies — there is no compType.
+type RunCompsRequest struct {
+	Subject CompSubject `json:"subject"`
+}
+
+// RunCompsResult is the tool-output shape for the run endpoint. Running comps is
+// billed and asynchronous. The backend returns different HTTP codes per billing
+// outcome (202/400/402/404/409/502) but always the same {status,message} body,
+// so we normalize every modeled outcome into this struct. Status is one of
+// "in_progress", "insufficient_credits", "already_in_progress",
+// "invalid_request", "no_billing_account", or "temporarily_unavailable".
+type RunCompsResult struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// runCompsEnvelope captures both placements of the RunCompsResult: `data` on
+// success (202) and `error.details` for the modeled billing outcomes.
+type runCompsEnvelope struct {
+	Data  *RunCompsResult `json:"data"`
+	Error *struct {
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
+		Details *RunCompsResult `json:"details"`
+	} `json:"error"`
+}
+
 func NewClient(baseUrl string) *Client {
 	return &Client{
 		baseURL:    baseUrl,
@@ -324,6 +368,51 @@ func (c *Client) GetComps(ctx context.Context, token, propertyID, compType strin
 		return nil, err
 	}
 	return &parsed.Data, nil
+}
+
+// RunComps starts a (billed, asynchronous) comp generation job for the subject
+// property. Every outcome the backend models — accepted plus the billing/
+// validation cases — comes back as a normal *RunCompsResult (read its Status).
+// Only auth/transport failures or an unrecognizable body return a Go error.
+func (c *Client) RunComps(ctx context.Context, token string, req RunCompsRequest) (*RunCompsResult, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	requrl := c.baseURL + "/connect/v1/run-comps"
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var env runCompsEnvelope
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		return nil, fmt.Errorf("run comps failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+	// Success (202) carries the result in `data`; modeled billing/validation
+	// outcomes carry it in `error.details`. Either is a valid result to surface.
+	if env.Data != nil && env.Data.Status != "" {
+		return env.Data, nil
+	}
+	if env.Error != nil && env.Error.Details != nil && env.Error.Details.Status != "" {
+		return env.Error.Details, nil
+	}
+	// Nothing we recognize (e.g. 401 auth failure) — surface as an error.
+	return nil, fmt.Errorf("run comps failed: status %d, body %s", resp.StatusCode, respBody)
 }
 
 func (c *Client) GetPropertyDetails(ctx context.Context, token, propertyID string) (map[string]interface{}, error) {

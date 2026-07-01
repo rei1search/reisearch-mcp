@@ -2,6 +2,9 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -38,6 +41,21 @@ type GetPropertyListInput struct {
 type GetCompsInput struct {
 	PropertyID string `json:"propertyID"`
 	CompType   string `json:"compType"`
+}
+
+// RunCompsInput drives the run_comps tool. Only propertyID is required — the
+// comp subject (address, geo, beds/baths) is hydrated from the property's stored
+// details. Any field the caller sets explicitly overrides the hydrated value.
+type RunCompsInput struct {
+	PropertyID string  `json:"propertyID"`
+	Address    string  `json:"address,omitempty"`
+	City       string  `json:"city,omitempty"`
+	State      string  `json:"state,omitempty"`
+	ZipCode    string  `json:"zipCode,omitempty"`
+	Latitude   float64 `json:"latitude,omitempty"`
+	Longitude  float64 `json:"longitude,omitempty"`
+	Bedrooms   string  `json:"bedrooms,omitempty"`
+	Bathrooms  string  `json:"bathrooms,omitempty"`
 }
 
 func (h *PropertyHandler) CreateProperty(ctx context.Context, req *mcp.CallToolRequest, input reisearch.CreatePropertyRequest) (*mcp.CallToolResult, *reisearch.Property, error) {
@@ -98,6 +116,122 @@ func (h *PropertyHandler) GetComps(ctx context.Context, req *mcp.CallToolRequest
 	return nil, result, nil
 }
 
+func (h *PropertyHandler) RunComps(ctx context.Context, req *mcp.CallToolRequest, input RunCompsInput) (*mcp.CallToolResult, *reisearch.RunCompsResult, error) {
+	token := TokenFromContext(ctx)
+
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+
+	// Hydrate the comp subject from the property's stored details, then let any
+	// caller-supplied fields override the hydrated values.
+	details, err := h.client.GetPropertyDetails(ctx, token, input.PropertyID)
+	if err != nil {
+		return nil, nil, err
+	}
+	subject := subjectFromDetails(input.PropertyID, details)
+
+	if input.Address != "" {
+		subject.Address = input.Address
+	}
+	if input.City != "" {
+		subject.City = input.City
+	}
+	if input.State != "" {
+		subject.State = input.State
+	}
+	if input.ZipCode != "" {
+		subject.ZipCode = input.ZipCode
+	}
+	if input.Latitude != 0 {
+		subject.Latitude = input.Latitude
+	}
+	if input.Longitude != 0 {
+		subject.Longitude = input.Longitude
+	}
+	if input.Bedrooms != "" {
+		subject.Bedrooms = input.Bedrooms
+	}
+	if input.Bathrooms != "" {
+		subject.Bathrooms = input.Bathrooms
+	}
+
+	// Address is required by the backend; fail early with a clear message
+	// instead of letting run-comps return an opaque 400.
+	if subject.Address == "" {
+		return nil, nil, fmt.Errorf("this property has no address on file, so comps can't be generated; add an address to the property or pass one explicitly")
+	}
+
+	result, err := h.client.RunComps(ctx, token, reisearch.RunCompsRequest{Subject: subject})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// subjectFromDetails builds a comp subject from a get_property_details payload.
+// The payload wraps the property record under "property_detail"; lat/long are
+// stored there as strings and are parsed to float64 for the comps API.
+func subjectFromDetails(propertyID string, details map[string]interface{}) reisearch.CompSubject {
+	subject := reisearch.CompSubject{PropertyID: propertyID}
+
+	pd, _ := details["property_detail"].(map[string]interface{})
+	if pd == nil {
+		return subject
+	}
+
+	getString := func(key string) string {
+		if v, ok := pd[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	// Prefer the pre-formatted full address; otherwise compose one from parts.
+	subject.Address = getString("location")
+	if subject.Address == "" {
+		subject.Address = composeAddress(getString("street"), getString("city"), getString("state"), getString("zipCode"))
+	}
+	subject.City = getString("city")
+	subject.State = getString("state")
+	subject.ZipCode = getString("zipCode")
+	subject.Bedrooms = getString("bedrooms")
+	subject.Bathrooms = getString("bathrooms")
+	subject.Latitude = parseFloat(getString("lat"))
+	subject.Longitude = parseFloat(getString("long"))
+
+	return subject
+}
+
+// composeAddress joins the street line with "city, state zip", skipping blanks,
+// producing e.g. "742 Evergreen Terrace, Springfield, IL 62704".
+func composeAddress(street, city, state, zip string) string {
+	var parts []string
+	if street != "" {
+		parts = append(parts, street)
+	}
+	if city != "" {
+		parts = append(parts, city)
+	}
+	region := strings.TrimSpace(state + " " + zip)
+	if region != "" {
+		parts = append(parts, region)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// parseFloat returns the float64 value of s, or 0 when s is empty/unparseable.
+func parseFloat(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -106,5 +240,6 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_details", Description: "Get a property's full details (core info + deal structure). Requires a property id."}, h.GetPropertyDetails)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_list", Description: "List all properties the current user has access to — i.e. their property dashboard/list view, including both properties they created and properties shared with them (paginated). This is the list-view companion to get_property_details. Optional filters: ownership ('mine' for properties the user created, 'shared' for ones shared with them; omit for both); status to filter by stage, one of 'draft', 'published', 'archived', 'deleted' (omit for all); limit to cap results (default 10). Pass lastKey (from a previous response) to fetch the next page."}, h.GetPropertyList)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_comps", Description: "Read the comparable properties ('comps') for a property under a given exit strategy. Requires propertyID and compType (the exit strategy / comparison basis, e.g. 'sold', 'rental', 'affordable_housing'). If the user hasn't said which exit strategy they want, ASK them before calling — do not guess. The result has a 'status': 'ready' (comps available), 'in_progress' (still generating — comps may already be partially populated, so show what's there and suggest checking back shortly), 'no_comps_yet' (never run for this property/strategy — offer to run comps but do NOT run them without the user's confirmation, since running comps is billed), 'no_results', 'failed', or 'cancelled'. Always relay the human-readable 'message'."}, h.GetComps)
+	mcp.AddTool(server, &mcp.Tool{Name: "run_comps", Description: "Start generating comparable properties ('comps') for a property. This is BILLED (costs credits) and runs ASYNCHRONOUSLY, so ALWAYS confirm with the user before calling — the normal flow is to check get_comps first and only run when there are none. Requires only propertyID; the comp subject (address, geo coordinates, beds/baths) is pulled automatically from the property's stored details. You may optionally override address/city/state/zipCode/latitude/longitude/bedrooms/bathrooms, but this is rarely needed. One run generates comps across ALL exit strategies at once — there is no compType here. The result 'status' is one of: 'in_progress' (accepted — comps are now generating; tell the user to check back shortly with get_comps, which will show each comp as it lands), 'insufficient_credits', 'already_in_progress' (a run is already underway for this property), 'invalid_request', 'no_billing_account', or 'temporarily_unavailable'. Always relay the human-readable 'message'."}, h.RunComps)
 
 }
