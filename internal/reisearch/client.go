@@ -127,26 +127,12 @@ type getCompsResponse struct {
 	Data    CompsResult `json:"data"`
 }
 
-// CompSubject is the property we want comps generated for. PropertyID and
-// Address are the only fields the backend requires; the rest refine matching.
-// Latitude/Longitude are float64 here (the comps API wants numbers), even though
-// the stored property record keeps lat/long as strings.
-type CompSubject struct {
-	PropertyID string  `json:"propertyId"`
-	Address    string  `json:"address"`
-	City       string  `json:"city,omitempty"`
-	State      string  `json:"state,omitempty"`
-	ZipCode    string  `json:"zipCode,omitempty"`
-	Latitude   float64 `json:"latitude,omitempty"`
-	Longitude  float64 `json:"longitude,omitempty"`
-	Bedrooms   string  `json:"bedrooms,omitempty"`
-	Bathrooms  string  `json:"bathrooms,omitempty"`
-}
-
-// RunCompsRequest is the POST /run-comps body. One run covers all exit
-// strategies — there is no compType.
+// RunCompsRequest is the POST /run-comps body. The only input is the property
+// id — the backend loads that property and builds the comp subject (address,
+// geo, beds/baths) itself. One run covers all exit strategies — there is no
+// compType.
 type RunCompsRequest struct {
-	Subject CompSubject `json:"subject"`
+	PropertyID string `json:"propertyId"`
 }
 
 // RunCompsResult is the tool-output shape for the run endpoint. Running comps is
@@ -161,7 +147,9 @@ type RunCompsResult struct {
 }
 
 // runCompsEnvelope captures both placements of the RunCompsResult: `data` on
-// success (202) and `error.details` for the modeled billing outcomes.
+// success (202) and `error.details` for the modeled billing outcomes. For
+// PROPERTY_NOT_FOUND (404) there is no `details`, so we fall back to error.code
+// and error.message.
 type runCompsEnvelope struct {
 	Data  *RunCompsResult `json:"data"`
 	Error *struct {
@@ -410,6 +398,11 @@ func (c *Client) RunComps(ctx context.Context, token string, req RunCompsRequest
 	}
 	if env.Error != nil && env.Error.Details != nil && env.Error.Details.Status != "" {
 		return env.Error.Details, nil
+	}
+	// PROPERTY_NOT_FOUND (404) is returned as an error envelope with no
+	// `details`, so map it to a clean status using the human-readable message.
+	if env.Error != nil && env.Error.Code == "PROPERTY_NOT_FOUND" {
+		return &RunCompsResult{Status: "property_not_found", Message: env.Error.Message}, nil
 	}
 	// Nothing we recognize (e.g. 401 auth failure) — surface as an error.
 	return nil, fmt.Errorf("run comps failed: status %d, body %s", resp.StatusCode, respBody)
