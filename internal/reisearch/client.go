@@ -407,6 +407,116 @@ func (c *Client) SearchProperties(ctx context.Context, token string, p PropertyS
 	return results, nil
 }
 
+// createFolderResponse decodes the standard envelope; the created folder object
+// lives under `data`. Its exact shape is left dynamic (map) since we only pass
+// it back through to the caller.
+type createFolderResponse struct {
+	Data map[string]interface{} `json:"data"`
+}
+
+// CreateFolder creates a folder for the caller. Like the search endpoint, the
+// params go in the query string (name is required; parentID nests the new
+// folder under an existing one) and the body is empty. Returns the created
+// folder object on HTTP 201.
+func (c *Client) CreateFolder(ctx context.Context, token, name, parentID, description string) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("name", name)
+	if parentID != "" {
+		q.Set("folder_id", parentID)
+	}
+	if description != "" {
+		q.Set("description", description)
+	}
+
+	requrl := c.baseURL + "/connect/v1/folders?" + q.Encode()
+
+	// POST with an empty body — the handler reads params from the query string.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("create folder failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed createFolderResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+// NotificationsPage is the clean, tool-facing shape for a page of notifications.
+type NotificationsPage struct {
+	Items      []map[string]interface{} `json:"items"`
+	NextCursor string                   `json:"nextCursor,omitempty"`
+}
+
+// getUnreadNotificationsResponse decodes the standard envelope; the page lives
+// under `data`.
+type getUnreadNotificationsResponse struct {
+	Data NotificationsPage `json:"data"`
+}
+
+// GetUnreadNotifications returns the caller's active (non-dismissed) unread
+// notifications, paginated. limit defaults to 20 (max 100) server-side when
+// omitted; cursor pages through results.
+func (c *Client) GetUnreadNotifications(ctx context.Context, token string, limit int, cursor string) (*NotificationsPage, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+
+	requrl := c.baseURL + "/connect/v1/notifications/unread"
+	if encoded := q.Encode(); encoded != "" {
+		requrl += "?" + encoded
+	}
+
+	// GET has no body.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get unread notifications failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed getUnreadNotificationsResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &parsed.Data, nil
+}
+
 // GetComps reads the latest comp report for a property under a given comp type
 // (exit strategy, e.g. "sold", "rental"). Both propertyID and compType are
 // required by the backend. The call returns HTTP 200 regardless of state; the
