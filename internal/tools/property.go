@@ -184,7 +184,14 @@ func (h *PropertyHandler) GetUnreadNotifications(ctx context.Context, req *mcp.C
 	return nil, page, nil
 }
 
-func (h *PropertyHandler) SearchProperties(ctx context.Context, req *mcp.CallToolRequest, input SearchPropertiesInput) (*mcp.CallToolResult, []map[string]interface{}, error) {
+// SearchPropertiesOutput wraps the result array in an object. The MCP SDK
+// requires a tool's structured output schema to be an object, not a bare array,
+// so the matching properties are returned under a "properties" field.
+type SearchPropertiesOutput struct {
+	Properties []map[string]interface{} `json:"properties"`
+}
+
+func (h *PropertyHandler) SearchProperties(ctx context.Context, req *mcp.CallToolRequest, input SearchPropertiesInput) (*mcp.CallToolResult, *SearchPropertiesOutput, error) {
 	token := TokenFromContext(ctx)
 
 	// Multi-value filters go over the wire as comma-separated strings.
@@ -209,7 +216,7 @@ func (h *PropertyHandler) SearchProperties(ctx context.Context, req *mcp.CallToo
 	if err != nil {
 		return nil, nil, err
 	}
-	return nil, results, nil
+	return nil, &SearchPropertiesOutput{Properties: results}, nil
 }
 
 func Register(server *mcp.Server, client *reisearch.Client) {
