@@ -318,6 +318,95 @@ func (c *Client) GetSharedProperties(ctx context.Context, token string, limit in
 	}, nil
 }
 
+// PropertySearchParams holds the wire-ready query parameters for a property
+// search. Every field is optional; empty strings and false bools are omitted.
+// Multi-value fields (HomeTypes, DealTypes, Tags) are comma-separated strings,
+// already joined by the caller. Numeric fields stay as strings — the backend
+// parses them and silently skips any that don't parse.
+type PropertySearchParams struct {
+	Address   string
+	City      string
+	ZipCode   string
+	HomeTypes string
+	YearBuilt string
+	DealTypes string
+	MinPrice  string
+	MaxPrice  string
+	Beds      string
+	ExactBed  bool
+	Baths     string
+	ExactBath bool
+	Tags      string
+	Limit     string
+}
+
+// SearchProperties searches the caller's own and shared draft properties by
+// location and filters. Despite being a POST, every parameter goes in the query
+// string and the body is empty. The response is NOT the standard envelope: on
+// success it's a bare JSON array of property objects, so we decode it directly.
+// A failure comes back as HTTP 502 with {"error": "..."}.
+func (c *Client) SearchProperties(ctx context.Context, token string, p PropertySearchParams) ([]map[string]interface{}, error) {
+	q := url.Values{}
+	set := func(key, val string) {
+		if val != "" {
+			q.Set(key, val)
+		}
+	}
+	set("address", p.Address)
+	set("city", p.City)
+	set("zipCode", p.ZipCode)
+	set("homeTypes", p.HomeTypes)
+	set("yearBuilt", p.YearBuilt)
+	set("dealTypes", p.DealTypes)
+	set("minPrice", p.MinPrice)
+	set("maxPrice", p.MaxPrice)
+	set("beds", p.Beds)
+	set("baths", p.Baths)
+	set("tags", p.Tags)
+	set("limit", p.Limit)
+	// The exact-match flags default to "or more"; only send them when true.
+	if p.ExactBed {
+		q.Set("exactBed", "true")
+	}
+	if p.ExactBath {
+		q.Set("exactBath", "true")
+	}
+
+	requrl := c.baseURL + "/connect/v1/search/property"
+	if encoded := q.Encode(); encoded != "" {
+		requrl += "?" + encoded
+	}
+
+	// POST with an empty body — the handler reads params from the query string.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search properties failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	// Success is a bare JSON array (an empty result set is []), not an envelope.
+	var results []map[string]interface{}
+	if err := json.Unmarshal(respBody, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // GetComps reads the latest comp report for a property under a given comp type
 // (exit strategy, e.g. "sold", "rental"). Both propertyID and compType are
 // required by the backend. The call returns HTTP 200 regardless of state; the
