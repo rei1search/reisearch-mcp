@@ -86,6 +86,33 @@ type getNotesResponse struct {
 	Data    NotesPage `json:"data"`
 }
 
+// SharePropertyRequest is the POST /property/{id}/share body. UserID is the
+// collaborator to add; Actions is an optional custom permission list — omit it
+// to let the backend grant the defaults (property:View, property:Edit,
+// property:AddUserToDeal).
+type SharePropertyRequest struct {
+	UserID  string   `json:"userID"`
+	Actions []string `json:"actions,omitempty"`
+}
+
+// SharedProperty is the share record returned on success. The backend also
+// emits internal DynamoDB sort keys (statusSorted, etc.); we drop them here
+// since they aren't useful to the caller.
+type SharedProperty struct {
+	ID         string `json:"id"`
+	OwnerID    string `json:"ownerId"`
+	UserID     string `json:"userId"`
+	PropertyID string `json:"propertyId"`
+	CreatedAt  int64  `json:"createdAt"`
+	UpdatedAt  int64  `json:"updatedAt"`
+}
+
+type sharePropertyResponse struct {
+	Success bool           `json:"success"`
+	Message string         `json:"message"`
+	Data    SharedProperty `json:"data"`
+}
+
 // SharedPropertiesPage is the tool-output shape for the property list endpoint:
 // a batch of shared-property records (each carrying its full nested property)
 // plus an opaque cursor for the next page (empty when there are no more). Each
@@ -204,6 +231,48 @@ func (c *Client) CreateNote(ctx context.Context, token, propertyID string, req C
 	}
 	return &parsed.Data, nil
 
+}
+
+// ShareProperty adds a user as a collaborator on a property and grants them
+// permissions; the backend also sends the added user a property_shared
+// notification. Success is HTTP 200 with the share record. Every modeled
+// failure (already shared, target is the owner, no permission, property not
+// found) comes back as a non-200 with the standard error envelope, which we
+// surface as a Go error carrying the response body.
+func (c *Client) ShareProperty(ctx context.Context, token, propertyID string, req SharePropertyRequest) (*SharedProperty, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	requrl := c.baseURL + "/connect/v1/property/" + url.PathEscape(propertyID) + "/share"
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("share property failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed sharePropertyResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &parsed.Data, nil
 }
 
 func (c *Client) GetNotes(ctx context.Context, token, propertyID, cursor string, limit int) (*NotesPage, error) {

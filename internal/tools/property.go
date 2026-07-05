@@ -219,6 +219,33 @@ func (h *PropertyHandler) SearchProperties(ctx context.Context, req *mcp.CallToo
 	return nil, &SearchPropertiesOutput{Properties: results}, nil
 }
 
+// SharePropertyInput drives the share_property tool. PropertyID and UserID are
+// required; Actions is an optional custom permission list (omit to grant the
+// backend defaults). Actions is a JSON-body array here, so it passes straight
+// through — no comma-joining like the query-param tools.
+type SharePropertyInput struct {
+	PropertyID string   `json:"propertyID"`
+	UserID     string   `json:"userID"`
+	Actions    []string `json:"actions,omitempty"`
+}
+
+func (h *PropertyHandler) ShareProperty(ctx context.Context, req *mcp.CallToolRequest, input SharePropertyInput) (*mcp.CallToolResult, *reisearch.SharedProperty, error) {
+	token := TokenFromContext(ctx)
+
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	if input.UserID == "" {
+		return nil, nil, fmt.Errorf("userID is required")
+	}
+
+	result, err := h.client.ShareProperty(ctx, token, input.PropertyID, reisearch.SharePropertyRequest{UserID: input.UserID, Actions: input.Actions})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -231,5 +258,6 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "search_properties", Description: "Search the current user's OWN and SHARED properties by location and filters — their personal property database. This is a filtered search over the user's existing properties, NOT a search of homes for sale on the open market. Results are ALWAYS scoped server-side to properties the user owns or that are shared with them, and only those in the 'draft' stage; this cannot be changed from the request. All filters are optional — with none supplied it returns the caller's draft properties, most recently updated first. Filters: 'address' (free-text location; fuzzy-matches street/address/number/zip and, when set, orders results by relevance instead of date); 'city' (exact, case-insensitive); 'zipCode' (exact); 'homeTypes' (array of property types, e.g. ['house','condo']; matches ANY); 'dealTypes' (array of deal types; matches ANY); 'tags' (array of the user's property tag names; matches ANY — note: if none of the names resolve to a tag this user actually has, the result is EMPTY, not unfiltered); 'yearBuilt' (returns properties built in or after this year); 'minPrice'/'maxPrice' (listing price range); 'beds' and 'baths' (by default 'that many or more' — set 'exactBed'/'exactBath' to true to require an exact match); 'limit' (max results, default 50). Numeric fields are passed as strings (e.g. beds:'3', minPrice:'100000'); an unparseable value silently skips just that one filter. Returns a JSON array of property objects (empty array [] when nothing matches), each including its id and indexed fields (street, city, zipCode, listingPrice, bedrooms, bathrooms, propertyType, propertyTags, images, etc.)."}, h.SearchProperties)
 	mcp.AddTool(server, &mcp.Tool{Name: "create_folder", Description: "Create a folder in the current user's workspace to organize properties. Requires 'name' (1–100 characters). Optionally pass 'parentID' to nest the new folder inside an existing folder (omit to create a top-level/root folder), and 'description' for a short note. Returns the created folder object (including its id). Note: this creates a new folder every time it's called, so confirm the name with the user rather than guessing, and don't call it repeatedly for the same request."}, h.CreateFolder)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_unread_notifications", Description: "List the current user's unread, active (non-dismissed) notifications, most recent first, paginated. Both parameters are optional: 'limit' caps how many are returned (defaults to 20 server-side, max 100) and 'cursor' fetches the next page (pass the 'nextCursor' from a previous response). Returns an object with 'items' (each notification includes notificationid, type, detail, actions, created, is_read, is_dismissed, and property_id when the notification is about a property) and, when more results exist, 'nextCursor'. An empty 'items' list means the user has no unread notifications."}, h.GetUnreadNotifications)
+	mcp.AddTool(server, &mcp.Tool{Name: "share_property", Description: "Share a property/deal with another user: adds them as a collaborator, grants permissions, and sends them a 'property_shared' notification. Requires 'propertyID' (a valid UUID or ULID) and 'userID' (the user to add — this cannot be the property's owner, who already has full access). The caller must have permission to add users to this deal. 'actions' is OPTIONAL: omit it to grant the sensible defaults (view, edit, and the ability to add other collaborators). A custom 'actions' list is only honored when the caller owns the property or can manage its permissions — otherwise the defaults are granted no matter what is sent; 'property:View' is always included; and only the owner can grant 'property:ManagePermissions'. If the target user is already a collaborator the call fails (they can't be added twice); otherwise new actions are merged with any they already have, never removed. Valid actions: property:View, property:Edit, property:Delete, property:ViewAddress, property:ViewAddressRequest, property:AcceptAddressRequest, property:DeclineAddressRequest, property:ViewOffers, property:AcceptOffers, property:AddUserToDeal, property:CreateThread, property:ViewThreads, property:ManagePermissions, property:AddToFolder. Returns the share record on success; a failure (already shared, target is the owner, caller lacks permission, or property not found) is surfaced as an error."}, h.ShareProperty)
 
 }
