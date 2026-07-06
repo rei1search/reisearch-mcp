@@ -410,8 +410,8 @@ type PropertySearchParams struct {
 }
 
 // SearchProperties searches the caller's own and shared draft properties by
-// location and filters. Despite being a POST, every parameter goes in the query
-// string and the body is empty. The response is NOT the standard envelope: on
+// location and filters. It's a GET with every parameter in the query string
+// and no body. The response is NOT the standard envelope: on
 // success it's a bare JSON array of property objects, so we decode it directly.
 // A failure comes back as HTTP 502 with {"error": "..."}.
 func (c *Client) SearchProperties(ctx context.Context, token string, p PropertySearchParams) ([]map[string]interface{}, error) {
@@ -446,8 +446,8 @@ func (c *Client) SearchProperties(ctx context.Context, token string, p PropertyS
 		requrl += "?" + encoded
 	}
 
-	// POST with an empty body — the handler reads params from the query string.
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, nil)
+	// GET with the params in the query string and no body.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
 	if err != nil {
 		return nil, err
 	}
