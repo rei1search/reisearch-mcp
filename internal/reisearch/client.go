@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -884,10 +885,28 @@ type CRMPushOpportunity struct {
 	Error         string `json:"error,omitempty"`
 }
 
-// CRMPushResult is the data payload of a successful push. ContactSource is
-// "property" (identity came from the property's stored data) or "request" (from
-// the contact block).
+// CRMPushResult is the normalized outcome of a push. Status is "created" on
+// success (the contact fields are populated) or a lowercased backend error code
+// on a modeled failure ("already_in_crm", "crm_rejected", "location_required",
+// …), in which case Message and Details describe it. This lets the tool return
+// expected CRM outcomes as data the agent can branch on, instead of a hard Go
+// error. Details is a verbatim passthrough of the backend's error.details, so
+// richer reasons the backend adds later (e.g. reason:"duplicate_email") surface
+// automatically with no change here. ContactSource is "property" (identity came
+// from the property's stored data) or "request" (from the contact block).
 type CRMPushResult struct {
+	Status        string                 `json:"status"`
+	Message       string                 `json:"message,omitempty"`
+	ContactID     string                 `json:"contactId,omitempty"`
+	LocationID    string                 `json:"locationId,omitempty"`
+	PropertyID    string                 `json:"propertyId,omitempty"`
+	ContactSource string                 `json:"contactSource,omitempty"`
+	Opportunity   *CRMPushOpportunity    `json:"opportunity,omitempty"`
+	Details       map[string]interface{} `json:"details,omitempty"`
+}
+
+// crmPushData is the success payload carried under `data`.
+type crmPushData struct {
 	ContactID     string              `json:"contactId"`
 	LocationID    string              `json:"locationId"`
 	PropertyID    string              `json:"propertyId"`
@@ -895,17 +914,25 @@ type CRMPushResult struct {
 	Opportunity   *CRMPushOpportunity `json:"opportunity,omitempty"`
 }
 
-type crmPushResponse struct {
-	Success bool          `json:"success"`
-	Message string        `json:"message"`
-	Data    CRMPushResult `json:"data"`
+// crmPushEnvelope captures both a success (`data`) and a modeled failure
+// (`error`) so PushToCRM can normalize either into a CRMPushResult.
+type crmPushEnvelope struct {
+	Success bool         `json:"success"`
+	Message string       `json:"message"`
+	Data    *crmPushData `json:"data"`
+	Error   *struct {
+		Code    string                 `json:"code"`
+		Message string                 `json:"message"`
+		Details map[string]interface{} `json:"details"`
+	} `json:"error"`
 }
 
 // PushToCRM pushes a property to the caller's connected CRM as a new contact
-// (optionally creating an opportunity and attaching notes). Success is HTTP 201
-// with the push result. Modeled failures (already in CRM, location required,
-// reconnect required, CRM rejected, etc.) come back as non-201s with the
-// standard error envelope, which we surface as a Go error carrying the body.
+// (optionally creating an opportunity and attaching notes). It returns a
+// normalized CRMPushResult: Status "created" on success, or a lowercased error
+// code (already_in_crm, crm_rejected, location_required, …) with Message and
+// Details for a modeled failure. Only a transport failure or an unrecognizable
+// body returns a Go error.
 func (c *Client) PushToCRM(ctx context.Context, token string, req CRMPushRequest) (*CRMPushResult, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -931,15 +958,37 @@ func (c *Client) PushToCRM(ctx context.Context, token string, req CRMPushRequest
 		return nil, err
 	}
 
-	if resp.StatusCode != http.StatusCreated {
+	// Normalize the envelope into a structured outcome. A success carries
+	// `data`; a modeled failure carries `error.code`. Only a transport failure
+	// or an unrecognizable body becomes a Go error.
+	var env crmPushEnvelope
+	if err := json.Unmarshal(respBody, &env); err != nil {
 		return nil, fmt.Errorf("push to crm failed: status %d, body %s", resp.StatusCode, respBody)
 	}
 
-	var parsed crmPushResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, err
+	if env.Success && env.Data != nil {
+		return &CRMPushResult{
+			Status:        "created",
+			Message:       env.Message,
+			ContactID:     env.Data.ContactID,
+			LocationID:    env.Data.LocationID,
+			PropertyID:    env.Data.PropertyID,
+			ContactSource: env.Data.ContactSource,
+			Opportunity:   env.Data.Opportunity,
+		}, nil
 	}
-	return &parsed.Data, nil
+
+	// Modeled failure: surface the backend's error code as a status plus its
+	// message and details (passed through verbatim), not a Go error.
+	if env.Error != nil && env.Error.Code != "" {
+		return &CRMPushResult{
+			Status:  strings.ToLower(env.Error.Code),
+			Message: env.Error.Message,
+			Details: env.Error.Details,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("push to crm failed: status %d, body %s", resp.StatusCode, respBody)
 }
 
 // crmGet is a shared helper for the read-only CRM picker endpoints: a GET with
