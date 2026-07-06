@@ -476,6 +476,99 @@ func (c *Client) SearchProperties(ctx context.Context, token string, p PropertyS
 	return results, nil
 }
 
+// ConnectionSearchResult is the raw (non-enveloped) body of the user/connection
+// search endpoint: unlike most endpoints it does NOT use the standard
+// {success,data,message} envelope, so we decode it directly. Total is the count
+// in THIS page (not a global total); NextCursor is empty when there are no more
+// pages and only advances in LIST mode.
+type ConnectionSearchResult struct {
+	Connections []Connection `json:"connections"`
+	Total       int          `json:"total"`
+	Size        int          `json:"size"`
+	NextCursor  string       `json:"next_cursor"`
+	Message     string       `json:"message"`
+}
+
+// Connection is one entry in a connection search: the connection's profile plus
+// the relationship state. Status and Direction are opaque strings passed through
+// from the search service.
+type Connection struct {
+	User      ConnectionUser `json:"user"`
+	Status    string         `json:"status"`
+	Direction string         `json:"direction"`
+}
+
+// ConnectionUser is a connection's public profile. Its ID is what you pass as
+// userID to ShareProperty.
+type ConnectionUser struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Expertise string `json:"expertise"`
+	City      string `json:"city"`
+	Email     string `json:"email"`
+	Username  string `json:"username"`
+	Img       string `json:"img"`
+}
+
+// SearchUsers searches the authenticated user's connections (their own network,
+// not all users). The backend infers the search mode from which params are set:
+// none => LIST (paginated via lastCursor), name => NAME, expertise and/or city
+// => FILTER. size caps the page (default 15, max 50 server-side). The response
+// is raw JSON (no envelope); a failure comes back as a non-200 with a
+// {"error": "..."} body, which we surface as an error.
+func (c *Client) SearchUsers(ctx context.Context, token, name, expertise, city string, size int, lastCursor string) (*ConnectionSearchResult, error) {
+	q := url.Values{}
+	if name != "" {
+		q.Set("name", name)
+	}
+	if expertise != "" {
+		q.Set("expertise", expertise)
+	}
+	if city != "" {
+		q.Set("city", city)
+	}
+	if size > 0 {
+		q.Set("size", strconv.Itoa(size))
+	}
+	if lastCursor != "" {
+		q.Set("lastCursor", lastCursor)
+	}
+
+	requrl := c.baseURL + "/connect/v1/search/users"
+	if encoded := q.Encode(); encoded != "" {
+		requrl += "?" + encoded
+	}
+
+	// GET has no body.
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search users failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	// Raw body (not the standard envelope) — decode directly.
+	var result ConnectionSearchResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // createFolderResponse decodes the standard envelope; the created folder object
 // lives under `data`. Its exact shape is left dynamic (map) since we only pass
 // it back through to the caller.

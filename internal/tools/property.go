@@ -246,6 +246,27 @@ func (h *PropertyHandler) ShareProperty(ctx context.Context, req *mcp.CallToolRe
 	return nil, result, nil
 }
 
+// SearchUsersInput drives the search_users tool. Every field is optional; the
+// backend infers the search mode from which fields are set (see the tool
+// description). Size caps the page (default 15, max 50).
+type SearchUsersInput struct {
+	Name       string `json:"name,omitempty"`
+	Expertise  string `json:"expertise,omitempty"`
+	City       string `json:"city,omitempty"`
+	Size       int    `json:"size,omitempty"`
+	LastCursor string `json:"lastCursor,omitempty"`
+}
+
+func (h *PropertyHandler) SearchUsers(ctx context.Context, req *mcp.CallToolRequest, input SearchUsersInput) (*mcp.CallToolResult, *reisearch.ConnectionSearchResult, error) {
+	token := TokenFromContext(ctx)
+
+	result, err := h.client.SearchUsers(ctx, token, input.Name, input.Expertise, input.City, input.Size, input.LastCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -259,5 +280,6 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "create_folder", Description: "Create a folder in the current user's workspace to organize properties. Requires 'name' (1–100 characters). Optionally pass 'parentID' to nest the new folder inside an existing folder (omit to create a top-level/root folder), and 'description' for a short note. Returns the created folder object (including its id). Note: this creates a new folder every time it's called, so confirm the name with the user rather than guessing, and don't call it repeatedly for the same request."}, h.CreateFolder)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_unread_notifications", Description: "List the current user's unread, active (non-dismissed) notifications, most recent first, paginated. Both parameters are optional: 'limit' caps how many are returned (defaults to 20 server-side, max 100) and 'cursor' fetches the next page (pass the 'nextCursor' from a previous response). Returns an object with 'items' (each notification includes notificationid, type, detail, actions, created, is_read, is_dismissed, and property_id when the notification is about a property) and, when more results exist, 'nextCursor'. An empty 'items' list means the user has no unread notifications."}, h.GetUnreadNotifications)
 	mcp.AddTool(server, &mcp.Tool{Name: "share_property", Description: "Share a property/deal with another user: adds them as a collaborator, grants permissions, and sends them a 'property_shared' notification. Requires 'propertyID' (a valid UUID or ULID) and 'userID' (the user to add — this cannot be the property's owner, who already has full access). The caller must have permission to add users to this deal. 'actions' is OPTIONAL: omit it to grant the sensible defaults (view, edit, and the ability to add other collaborators). A custom 'actions' list is only honored when the caller owns the property or can manage its permissions — otherwise the defaults are granted no matter what is sent; 'property:View' is always included; and only the owner can grant 'property:ManagePermissions'. If the target user is already a collaborator the call fails (they can't be added twice); otherwise new actions are merged with any they already have, never removed. Valid actions: property:View, property:Edit, property:Delete, property:ViewAddress, property:ViewAddressRequest, property:AcceptAddressRequest, property:DeclineAddressRequest, property:ViewOffers, property:AcceptOffers, property:AddUserToDeal, property:CreateThread, property:ViewThreads, property:ManagePermissions, property:AddToFolder. Returns the share record on success; a failure (already shared, target is the owner, caller lacks permission, or property not found) is surfaced as an error."}, h.ShareProperty)
+	mcp.AddTool(server, &mcp.Tool{Name: "search_users", Description: "Search the CURRENT user's CONNECTIONS — the people in their own network — e.g. to find the userID to pass to share_property. This searches ONLY the caller's connections, never all users globally and never properties; someone who is not in the caller's network will not appear, so an empty result means 'no matching connections'. All parameters are optional and the backend infers the search MODE from what you send: send NONE of name/expertise/city to LIST the full connection list (paginate with lastCursor); send 'name' to search by name; send 'expertise' and/or 'city' to filter by those attributes. 'size' is the max results per page (default 15, max 50). IMPORTANT: cursor pagination with 'lastCursor' works ONLY in LIST mode — when searching by name or filtering there is no cursor paging, so raise 'size' (up to 50) to see more matches. In LIST mode, pass the 'next_cursor' from the previous response as 'lastCursor' to get the next page; an empty 'next_cursor' means there are no more pages. Returns an object with 'connections' (each entry has the connection's 'user' profile — including the 'id' you pass as userID to share_property — plus relationship 'status' and 'direction'), 'total' (the count in THIS page, not a global total), 'size' (the page size applied), and 'next_cursor'."}, h.SearchUsers)
 
 }
