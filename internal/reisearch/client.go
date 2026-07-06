@@ -1048,3 +1048,129 @@ func (c *Client) GetCRMPipelines(ctx context.Context, token, locationID string) 
 	}
 	return &out, nil
 }
+
+// CRMCreateOpportunityRequest is the POST /crm/opportunities body. Everything
+// but LocationID is required.
+type CRMCreateOpportunityRequest struct {
+	LocationID string `json:"locationId,omitempty"`
+	PipelineID string `json:"pipelineId"`
+	ContactID  string `json:"contactId"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+}
+
+// CRMOpportunityResult is the data payload from creating an opportunity for an
+// existing contact.
+type CRMOpportunityResult struct {
+	OpportunityID string `json:"opportunityId"`
+	LocationID    string `json:"locationId"`
+	PipelineID    string `json:"pipelineId"`
+	ContactID     string `json:"contactId"`
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+}
+
+type crmOpportunityResponse struct {
+	Success bool                 `json:"success"`
+	Message string               `json:"message"`
+	Data    CRMOpportunityResult `json:"data"`
+}
+
+// CreateCRMOpportunity creates an opportunity for a contact that already exists
+// in the CRM (typically to retry after a non-fatal opportunity failure during a
+// push). Success is HTTP 201; modeled failures come back as non-201s with the
+// standard error envelope, surfaced as a Go error carrying the body.
+func (c *Client) CreateCRMOpportunity(ctx context.Context, token string, req CRMCreateOpportunityRequest) (*CRMOpportunityResult, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	requrl := c.baseURL + "/connect/v1/crm/opportunities"
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("create crm opportunity failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed crmOpportunityResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &parsed.Data, nil
+}
+
+// crmAddNoteRequest is the POST body for adding a note to a pushed contact.
+type crmAddNoteRequest struct {
+	Note       string `json:"note"`
+	LocationID string `json:"locationId,omitempty"`
+}
+
+// CRMAddNoteResult is the data payload from adding a note to the contact a
+// previous push created.
+type CRMAddNoteResult struct {
+	PropertyID string `json:"propertyId"`
+	ContactID  string `json:"contactId"`
+	LocationID string `json:"locationId"`
+}
+
+type crmAddNoteResponse struct {
+	Success bool             `json:"success"`
+	Message string           `json:"message"`
+	Data    CRMAddNoteResult `json:"data"`
+}
+
+// AddCRMNote adds a note to the CRM contact created by a previous push of the
+// property. Success is HTTP 201. A property that was never pushed comes back as
+// 404 PROPERTY_NOT_IN_CRM (a non-201), surfaced as a Go error carrying the body.
+func (c *Client) AddCRMNote(ctx context.Context, token, propertyID, note, locationID string) (*CRMAddNoteResult, error) {
+	body, err := json.Marshal(crmAddNoteRequest{Note: note, LocationID: locationID})
+	if err != nil {
+		return nil, err
+	}
+
+	requrl := c.baseURL + "/connect/v1/crm/properties/" + url.PathEscape(propertyID) + "/notes"
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("add crm note failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed crmAddNoteResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &parsed.Data, nil
+}

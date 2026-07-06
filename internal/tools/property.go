@@ -346,6 +346,70 @@ func (h *PropertyHandler) GetCRMTags(ctx context.Context, req *mcp.CallToolReque
 	return nil, result, nil
 }
 
+// CreateCRMOpportunityInput drives the create_crm_opportunity tool. All fields
+// but locationId are required.
+type CreateCRMOpportunityInput struct {
+	LocationID string `json:"locationId,omitempty"`
+	PipelineID string `json:"pipelineId"`
+	ContactID  string `json:"contactId"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+}
+
+func (h *PropertyHandler) CreateCRMOpportunity(ctx context.Context, req *mcp.CallToolRequest, input CreateCRMOpportunityInput) (*mcp.CallToolResult, *reisearch.CRMOpportunityResult, error) {
+	token := TokenFromContext(ctx)
+
+	if input.PipelineID == "" {
+		return nil, nil, fmt.Errorf("pipelineId is required")
+	}
+	if input.ContactID == "" {
+		return nil, nil, fmt.Errorf("contactId is required")
+	}
+	if input.Name == "" {
+		return nil, nil, fmt.Errorf("name is required")
+	}
+	if input.Status == "" {
+		return nil, nil, fmt.Errorf("status is required")
+	}
+
+	result, err := h.client.CreateCRMOpportunity(ctx, token, reisearch.CRMCreateOpportunityRequest{
+		LocationID: input.LocationID,
+		PipelineID: input.PipelineID,
+		ContactID:  input.ContactID,
+		Name:       input.Name,
+		Status:     input.Status,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// AddCRMNoteInput drives the add_crm_note tool. PropertyID and Note are
+// required; LocationID is optional (needed only when several CRMs are connected).
+type AddCRMNoteInput struct {
+	PropertyID string `json:"propertyID"`
+	Note       string `json:"note"`
+	LocationID string `json:"locationId,omitempty"`
+}
+
+func (h *PropertyHandler) AddCRMNote(ctx context.Context, req *mcp.CallToolRequest, input AddCRMNoteInput) (*mcp.CallToolResult, *reisearch.CRMAddNoteResult, error) {
+	token := TokenFromContext(ctx)
+
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	if input.Note == "" {
+		return nil, nil, fmt.Errorf("note is required")
+	}
+
+	result, err := h.client.AddCRMNote(ctx, token, input.PropertyID, input.Note, input.LocationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -365,5 +429,7 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_crm_pipelines", Description: "List the pipelines (and their stages) in a connected CRM location — use this to get the 'pipelineId' for an opportunity (in push_lead_to_crm or create_crm_opportunity). Optional 'locationId' (required only when several CRMs are connected; omit it when exactly one is). Returns 'locationId', 'pipelines' (each with id, name, and stages [{id, name, position}]), and 'total'."}, h.GetCRMPipelines)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_crm_users", Description: "List the CRM users in a connected CRM location — use this to get the user 'id' to pass as 'contact.assignedTo' when pushing a lead. Optional 'locationId' (required only when several CRMs are connected). Returns 'locationId', 'users' (each with id, name, email), and 'total'."}, h.GetCRMUsers)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_crm_tags", Description: "List the tag names available in a connected CRM location — use this to pick existing 'contact.tags' when pushing a lead (you may also pass brand-new tag names). Optional 'locationId' (required only when several CRMs are connected). Returns 'locationId', 'tags' (an array of tag name strings), and 'total'."}, h.GetCRMTags)
+	mcp.AddTool(server, &mcp.Tool{Name: "create_crm_opportunity", Description: "Create an opportunity in a CRM pipeline for a contact that ALREADY exists in the CRM. The main use is to RETRY an opportunity after push_lead_to_crm reported a non-fatal failure (opportunity.created=false) — do NOT re-run push_lead_to_crm for that, because the contact already exists. Requires 'contactId' (the CRM contact id, e.g. the contactId returned by a previous push), 'pipelineId' (from get_crm_pipelines), 'name', and 'status' (one of open, won, lost, abandoned). 'locationId' is optional (required only when several CRMs are connected). Returns opportunityId plus the echoed locationId, pipelineId, contactId, name, and status."}, h.CreateCRMOpportunity)
+	mcp.AddTool(server, &mcp.Tool{Name: "add_crm_note", Description: "Add a note to the CRM contact created by a previous push of a property (push_lead_to_crm). Requires 'propertyID' (the ReiSearch property that was pushed) and 'note' (the note text). 'locationId' is optional (required only when several CRMs are connected). If the property was never pushed to the CRM this fails with 'PROPERTY_NOT_IN_CRM' — push it first with push_lead_to_crm. Returns propertyId, contactId, and locationId."}, h.AddCRMNote)
 
 }
