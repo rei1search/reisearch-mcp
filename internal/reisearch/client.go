@@ -839,3 +839,212 @@ func (c *Client) CreateProperty(ctx context.Context, token string, req CreatePro
 	return &parsed.Data, nil
 
 }
+
+// --- CRM (push a lead to the connected GoHighLevel CRM) ---
+
+// CRMContact is the nested contact block of a CRM push. ContactType is required
+// (property_owner|agent|jv_partner|bird_dog|buyer). UseStoredData is a *bool so
+// we can tell "unset" (nil → omitted → backend default true) apart from an
+// explicit false; a plain bool would zero-value to false and silently flip that
+// default.
+type CRMContact struct {
+	ContactType   string   `json:"contactType"`
+	UseStoredData *bool    `json:"useStoredData,omitempty"`
+	FirstName     string   `json:"firstName,omitempty"`
+	LastName      string   `json:"lastName,omitempty"`
+	Email         string   `json:"email,omitempty"`
+	Phone         string   `json:"phone,omitempty"`
+	AssignedTo    string   `json:"assignedTo,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Notes         []string `json:"notes,omitempty"`
+}
+
+// CRMOpportunity is the optional opportunity block. When present, all three
+// fields are required by the backend.
+type CRMOpportunity struct {
+	PipelineID string `json:"pipelineId"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+}
+
+// CRMPushRequest is the POST /crm/contacts body.
+type CRMPushRequest struct {
+	PropertyID  string          `json:"propertyId"`
+	LocationID  string          `json:"locationId,omitempty"`
+	Contact     CRMContact      `json:"contact"`
+	Opportunity *CRMOpportunity `json:"opportunity,omitempty"`
+}
+
+// CRMPushOpportunity is the opportunity outcome nested in a push result. An
+// opportunity failure does NOT fail the push, so Created may be false with a
+// human-readable Error even on a 201.
+type CRMPushOpportunity struct {
+	Created       bool   `json:"created"`
+	OpportunityID string `json:"opportunityId,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+// CRMPushResult is the data payload of a successful push. ContactSource is
+// "property" (identity came from the property's stored data) or "request" (from
+// the contact block).
+type CRMPushResult struct {
+	ContactID     string              `json:"contactId"`
+	LocationID    string              `json:"locationId"`
+	PropertyID    string              `json:"propertyId"`
+	ContactSource string              `json:"contactSource"`
+	Opportunity   *CRMPushOpportunity `json:"opportunity,omitempty"`
+}
+
+type crmPushResponse struct {
+	Success bool          `json:"success"`
+	Message string        `json:"message"`
+	Data    CRMPushResult `json:"data"`
+}
+
+// PushToCRM pushes a property to the caller's connected CRM as a new contact
+// (optionally creating an opportunity and attaching notes). Success is HTTP 201
+// with the push result. Modeled failures (already in CRM, location required,
+// reconnect required, CRM rejected, etc.) come back as non-201s with the
+// standard error envelope, which we surface as a Go error carrying the body.
+func (c *Client) PushToCRM(ctx context.Context, token string, req CRMPushRequest) (*CRMPushResult, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	requrl := c.baseURL + "/connect/v1/crm/contacts"
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("push to crm failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed crmPushResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &parsed.Data, nil
+}
+
+// crmGet is a shared helper for the read-only CRM picker endpoints: a GET with
+// an optional locationId query param that decodes the standard envelope's `data`
+// into out. Non-200 is surfaced as a Go error carrying the body.
+func (c *Client) crmGet(ctx context.Context, token, path, locationID string, out interface{}) error {
+	q := url.Values{}
+	if locationID != "" {
+		q.Set("locationId", locationID)
+	}
+	requrl := c.baseURL + path
+	if encoded := q.Encode(); encoded != "" {
+		requrl += "?" + encoded
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("crm get %s failed: status %d, body %s", path, resp.StatusCode, respBody)
+	}
+
+	// Standard envelope: pull `data` out and decode it into the caller's struct.
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		return err
+	}
+	return json.Unmarshal(env.Data, out)
+}
+
+// CRMConnectionsResult lists the caller's connected CRM accounts. Each entry has
+// locationId, accountName, and connectedAt (passed through as a map since the
+// exact shape isn't pinned down here).
+type CRMConnectionsResult struct {
+	Connections []map[string]interface{} `json:"connections"`
+	Total       int                      `json:"total"`
+}
+
+func (c *Client) GetCRMConnections(ctx context.Context, token string) (*CRMConnectionsResult, error) {
+	var out CRMConnectionsResult
+	if err := c.crmGet(ctx, token, "/connect/v1/crm/connections", "", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CRMUsersResult lists assignable CRM users for a location. Each entry has id,
+// name, email.
+type CRMUsersResult struct {
+	LocationID string                   `json:"locationId"`
+	Users      []map[string]interface{} `json:"users"`
+	Total      int                      `json:"total"`
+}
+
+func (c *Client) GetCRMUsers(ctx context.Context, token, locationID string) (*CRMUsersResult, error) {
+	var out CRMUsersResult
+	if err := c.crmGet(ctx, token, "/connect/v1/crm/users", locationID, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CRMTagsResult lists the tag names available in a CRM location.
+type CRMTagsResult struct {
+	LocationID string   `json:"locationId"`
+	Tags       []string `json:"tags"`
+	Total      int      `json:"total"`
+}
+
+func (c *Client) GetCRMTags(ctx context.Context, token, locationID string) (*CRMTagsResult, error) {
+	var out CRMTagsResult
+	if err := c.crmGet(ctx, token, "/connect/v1/crm/tags", locationID, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CRMPipelinesResult lists the pipelines (and their stages) in a CRM location.
+// Each pipeline has id, name, and stages [{id, name, position}].
+type CRMPipelinesResult struct {
+	LocationID string                   `json:"locationId"`
+	Pipelines  []map[string]interface{} `json:"pipelines"`
+	Total      int                      `json:"total"`
+}
+
+func (c *Client) GetCRMPipelines(ctx context.Context, token, locationID string) (*CRMPipelinesResult, error) {
+	var out CRMPipelinesResult
+	if err := c.crmGet(ctx, token, "/connect/v1/crm/pipelines", locationID, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
