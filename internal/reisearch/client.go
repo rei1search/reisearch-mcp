@@ -1223,3 +1223,393 @@ func (c *Client) AddCRMNote(ctx context.Context, token, propertyID, note, locati
 	}
 	return &parsed.Data, nil
 }
+
+// ---------------------------------------------------------------------------
+// Folders
+// ---------------------------------------------------------------------------
+//
+// The folder endpoints follow the same envelope as the rest of the API
+// ({success, message, data}). The payload shapes are dynamic maps: we only pass
+// them back through to the caller, so mirroring the large backend models buys
+// nothing. Query-param methods mirror CreateFolder; MoveFolder mirrors the
+// JSON-body pattern of RunComps.
+
+// folderDataResponse decodes the standard envelope, leaving `data` dynamic.
+type folderDataResponse struct {
+	Data map[string]interface{} `json:"data"`
+}
+
+// GetFolderInfo fetches a folder's aggregate info (metadata + properties +
+// users + subfolders) in one call. folderID goes in the query string.
+func (c *Client) GetFolderInfo(ctx context.Context, token, folderID string) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("folder_id", folderID)
+
+	requrl := c.baseURL + "/connect/v1/folders/info?" + q.Encode()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get folder info failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderDataResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+// FolderListPage is the tool-facing shape for the folder listing endpoints
+// (Myfolders / MyCreatedRootFolders / FavoriteFolders / SharedWithme). The
+// backend nests {data: {folders, last_key, count}} under the standard envelope;
+// we flatten it. When a folder_id is supplied, GET /folders returns that
+// folder's contents instead, which has a different shape — so ListFolders keeps
+// Folders dynamic and simply passes through whatever the backend sends.
+type FolderListPage struct {
+	Folders []map[string]interface{} `json:"folders"`
+	LastKey string                   `json:"lastKey,omitempty"`
+	Count   int                      `json:"count,omitempty"`
+}
+
+type folderListResponse struct {
+	Data struct {
+		Folders []map[string]interface{} `json:"folders"`
+		LastKey string                   `json:"last_key"`
+		Count   int                      `json:"count"`
+	} `json:"data"`
+}
+
+// ListFolders lists the caller's folders (paginated). When folderID is set the
+// backend drills into that folder's contents instead of listing top-level
+// folders; the caller is responsible for interpreting the differing shape.
+func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastKey, folderID string) (*FolderListPage, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if lastKey != "" {
+		q.Set("last_key", lastKey)
+	}
+	if folderID != "" {
+		q.Set("folder_id", folderID)
+	}
+
+	requrl := c.baseURL + "/connect/v1/folders"
+	if encoded := q.Encode(); encoded != "" {
+		requrl += "?" + encoded
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list folders failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderListResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &FolderListPage{
+		Folders: parsed.Data.Folders,
+		LastKey: parsed.Data.LastKey,
+		Count:   parsed.Data.Count,
+	}, nil
+}
+
+// FolderMembersResult wraps the members array in an object. The MCP SDK requires
+// a tool's structured output to be an object, not a bare array, so the
+// collaboration records are returned under a "members" field.
+type FolderMembersResult struct {
+	Members []map[string]interface{} `json:"members"`
+}
+
+type folderMembersResponse struct {
+	Data []map[string]interface{} `json:"data"`
+}
+
+// GetFolderMembers lists the collaborators on a folder. folderID goes in the
+// query string; the backend returns an array of FolderCollaboration records
+// under `data`.
+func (c *Client) GetFolderMembers(ctx context.Context, token, folderID string) (*FolderMembersResult, error) {
+	q := url.Values{}
+	q.Set("folder_id", folderID)
+
+	requrl := c.baseURL + "/connect/v1/folders/members?" + q.Encode()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get folder members failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderMembersResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return &FolderMembersResult{Members: parsed.Data}, nil
+}
+
+// AddPropertyToFolderRequest holds the query params for linking a property to a
+// folder. Mode is "move" or "copy"; the copy flags are only meaningful when
+// Mode=="copy", and PreviousFolderID enables clean-up on a move.
+type AddPropertyToFolderRequest struct {
+	FolderID          string
+	PropertyID        string
+	Mode              string
+	PreviousFolderID  string
+	CopyDealStructure bool
+	CopyDocuments     bool
+	CopyComps         bool
+}
+
+// AddPropertyToFolder links a property into a folder via move (re-link) or copy
+// (clone). Params go in the query string; the body is empty. Returns the new
+// FolderPropertyLink under `data`.
+func (c *Client) AddPropertyToFolder(ctx context.Context, token string, req AddPropertyToFolderRequest) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("folder_id", req.FolderID)
+	q.Set("property_id", req.PropertyID)
+	q.Set("mode", req.Mode)
+	if req.PreviousFolderID != "" {
+		q.Set("previous_folder_id", req.PreviousFolderID)
+	}
+	if req.Mode == "copy" {
+		if req.CopyDealStructure {
+			q.Set("copy_deal_structure", "true")
+		}
+		if req.CopyDocuments {
+			q.Set("copy_documents", "true")
+		}
+		if req.CopyComps {
+			q.Set("copy_comps", "true")
+		}
+	}
+
+	requrl := c.baseURL + "/connect/v1/folders/property?" + q.Encode()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("add property to folder failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderDataResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+// AddFolderMember adds a single member to a folder. All params go in the query
+// string; the body is empty. existingPropertyAccess grants the new member
+// access to properties already in the folder.
+func (c *Client) AddFolderMember(ctx context.Context, token, folderID, memberID string, existingPropertyAccess bool) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("folder_id", folderID)
+	q.Set("member_id", memberID)
+	if existingPropertyAccess {
+		q.Set("existing_property_access", "true")
+	}
+
+	requrl := c.baseURL + "/connect/v1/folders/members?" + q.Encode()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("add folder member failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderDataResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+// MoveFolderRequest is the JSON body for POST /folders/move.
+type MoveFolderRequest struct {
+	MovingFolderID string `json:"moving_folder_id"`
+	TargetFolderID string `json:"target_folder_id"`
+}
+
+// MoveFolder moves a folder (with its whole subtree) under a new parent.
+// Unlike the other folder mutations this takes a JSON body. Permission is
+// enforced inside the backend service.
+func (c *Client) MoveFolder(ctx context.Context, token string, req MoveFolderRequest) (map[string]interface{}, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	requrl := c.baseURL + "/connect/v1/folders/move"
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("move folder failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderDataResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+// RenameFolder renames a folder. Params go in the query string; the body is
+// empty.
+func (c *Client) RenameFolder(ctx context.Context, token, folderID, name string) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("folder_id", folderID)
+	q.Set("name", name)
+
+	requrl := c.baseURL + "/connect/v1/folders/rename?" + q.Encode()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("rename folder failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderDataResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}
+
+// DeleteFolder deletes a folder and its entire subtree. folderID goes in the
+// query string.
+func (c *Client) DeleteFolder(ctx context.Context, token, folderID string) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("folder_id", folderID)
+
+	requrl := c.baseURL + "/connect/v1/folders?" + q.Encode()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodDelete, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("delete folder failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+
+	var parsed folderDataResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Data, nil
+}

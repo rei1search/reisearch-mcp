@@ -410,6 +410,202 @@ func (h *PropertyHandler) AddCRMNote(ctx context.Context, req *mcp.CallToolReque
 	return nil, result, nil
 }
 
+// ---------------------------------------------------------------------------
+// Folder tools
+// ---------------------------------------------------------------------------
+
+// GetFolderInfoInput drives get_folder_info. FolderID is required.
+type GetFolderInfoInput struct {
+	FolderID string `json:"folderID"`
+}
+
+func (h *PropertyHandler) GetFolderInfo(ctx context.Context, req *mcp.CallToolRequest, input GetFolderInfoInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+
+	info, err := h.client.GetFolderInfo(ctx, token, input.FolderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, info, nil
+}
+
+// ListFoldersInput drives list_my_folders. All fields are optional: Limit caps
+// the page, LastKey pages through results, and FolderID drills into a specific
+// folder's contents instead of listing top-level folders.
+type ListFoldersInput struct {
+	Limit    int    `json:"limit,omitempty"`
+	LastKey  string `json:"lastKey,omitempty"`
+	FolderID string `json:"folderID,omitempty"`
+}
+
+func (h *PropertyHandler) ListFolders(ctx context.Context, req *mcp.CallToolRequest, input ListFoldersInput) (*mcp.CallToolResult, *reisearch.FolderListPage, error) {
+	token := TokenFromContext(ctx)
+
+	page, err := h.client.ListFolders(ctx, token, input.Limit, input.LastKey, input.FolderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, page, nil
+}
+
+// GetFolderMembersInput drives get_folder_members. FolderID is required.
+type GetFolderMembersInput struct {
+	FolderID string `json:"folderID"`
+}
+
+func (h *PropertyHandler) GetFolderMembers(ctx context.Context, req *mcp.CallToolRequest, input GetFolderMembersInput) (*mcp.CallToolResult, *reisearch.FolderMembersResult, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+
+	result, err := h.client.GetFolderMembers(ctx, token, input.FolderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// AddPropertyToFolderInput drives add_property_to_folder. FolderID, PropertyID,
+// and Mode ("move" or "copy") are required. PreviousFolderID enables clean-up on
+// a move; the copy flags are only meaningful when Mode=="copy".
+type AddPropertyToFolderInput struct {
+	FolderID          string `json:"folderID"`
+	PropertyID        string `json:"propertyID"`
+	Mode              string `json:"mode"`
+	PreviousFolderID  string `json:"previousFolderID,omitempty"`
+	CopyDealStructure bool   `json:"copyDealStructure,omitempty"`
+	CopyDocuments     bool   `json:"copyDocuments,omitempty"`
+	CopyComps         bool   `json:"copyComps,omitempty"`
+}
+
+func (h *PropertyHandler) AddPropertyToFolder(ctx context.Context, req *mcp.CallToolRequest, input AddPropertyToFolderInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	if input.Mode != "move" && input.Mode != "copy" {
+		return nil, nil, fmt.Errorf("mode is required and must be 'move' or 'copy'")
+	}
+
+	result, err := h.client.AddPropertyToFolder(ctx, token, reisearch.AddPropertyToFolderRequest{
+		FolderID:          input.FolderID,
+		PropertyID:        input.PropertyID,
+		Mode:              input.Mode,
+		PreviousFolderID:  input.PreviousFolderID,
+		CopyDealStructure: input.CopyDealStructure,
+		CopyDocuments:     input.CopyDocuments,
+		CopyComps:         input.CopyComps,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// AddFolderMemberInput drives add_folder_member. FolderID and MemberID are
+// required; ExistingPropertyAccess grants the member access to properties
+// already in the folder.
+type AddFolderMemberInput struct {
+	FolderID               string `json:"folderID"`
+	MemberID               string `json:"memberID"`
+	ExistingPropertyAccess bool   `json:"existingPropertyAccess,omitempty"`
+}
+
+func (h *PropertyHandler) AddFolderMember(ctx context.Context, req *mcp.CallToolRequest, input AddFolderMemberInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+	if input.MemberID == "" {
+		return nil, nil, fmt.Errorf("memberID is required")
+	}
+
+	result, err := h.client.AddFolderMember(ctx, token, input.FolderID, input.MemberID, input.ExistingPropertyAccess)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// MoveFolderInput drives move_folder. Both fields are required.
+type MoveFolderInput struct {
+	MovingFolderID string `json:"movingFolderID"`
+	TargetFolderID string `json:"targetFolderID"`
+}
+
+func (h *PropertyHandler) MoveFolder(ctx context.Context, req *mcp.CallToolRequest, input MoveFolderInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.MovingFolderID == "" {
+		return nil, nil, fmt.Errorf("movingFolderID is required")
+	}
+	if input.TargetFolderID == "" {
+		return nil, nil, fmt.Errorf("targetFolderID is required")
+	}
+
+	result, err := h.client.MoveFolder(ctx, token, reisearch.MoveFolderRequest{
+		MovingFolderID: input.MovingFolderID,
+		TargetFolderID: input.TargetFolderID,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// RenameFolderInput drives rename_folder. Both fields are required.
+type RenameFolderInput struct {
+	FolderID string `json:"folderID"`
+	Name     string `json:"name"`
+}
+
+func (h *PropertyHandler) RenameFolder(ctx context.Context, req *mcp.CallToolRequest, input RenameFolderInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+	if input.Name == "" {
+		return nil, nil, fmt.Errorf("name is required")
+	}
+
+	result, err := h.client.RenameFolder(ctx, token, input.FolderID, input.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// DeleteFolderInput drives delete_folder. FolderID is required.
+type DeleteFolderInput struct {
+	FolderID string `json:"folderID"`
+}
+
+func (h *PropertyHandler) DeleteFolder(ctx context.Context, req *mcp.CallToolRequest, input DeleteFolderInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+
+	result, err := h.client.DeleteFolder(ctx, token, input.FolderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -431,5 +627,14 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_crm_tags", Description: "List the tag names available in a connected CRM location — use this to pick existing 'contact.tags' when pushing a lead (you may also pass brand-new tag names). Optional 'locationId' (required only when several CRMs are connected). Returns 'locationId', 'tags' (an array of tag name strings), and 'total'."}, h.GetCRMTags)
 	mcp.AddTool(server, &mcp.Tool{Name: "create_crm_opportunity", Description: "Create an opportunity in a CRM pipeline for a contact that ALREADY exists in the CRM. The main use is to RETRY an opportunity after push_lead_to_crm reported a non-fatal failure (opportunity.created=false) — do NOT re-run push_lead_to_crm for that, because the contact already exists. Requires 'contactId' (the CRM contact id, e.g. the contactId returned by a previous push), 'pipelineId' (from get_crm_pipelines), 'name', and 'status' (one of open, won, lost, abandoned). 'locationId' is optional (required only when several CRMs are connected). Returns opportunityId plus the echoed locationId, pipelineId, contactId, name, and status."}, h.CreateCRMOpportunity)
 	mcp.AddTool(server, &mcp.Tool{Name: "add_crm_note", Description: "Add a note to the CRM contact created by a previous push of a property (push_lead_to_crm). Requires 'propertyID' (the ReiSearch property that was pushed) and 'note' (the note text). 'locationId' is optional (required only when several CRMs are connected). If the property was never pushed to the CRM this fails with 'PROPERTY_NOT_IN_CRM' — push it first with push_lead_to_crm. Returns propertyId, contactId, and locationId."}, h.AddCRMNote)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "get_folder_info", Description: "Get a single folder's aggregate info in one call: its metadata plus the properties, members (users), and subfolders it contains, along with counts. Requires 'folderID' (a valid UUID or ULID). Use this to 'open' a folder and see what's inside — it's the detail companion to list_my_folders. Returns folder_id, folder_name, created_at, created_by, subfolder_count and subfolders (ids), property_count and properties (ids), and user_count and users (ids). The caller needs folder:View permission on the folder."}, h.GetFolderInfo)
+	mcp.AddTool(server, &mcp.Tool{Name: "list_my_folders", Description: "List the current user's folders (paginated) — their folder/workspace view. All parameters are optional: 'limit' caps the page, 'lastKey' fetches the next page (pass the 'lastKey' from a previous response; an empty value means no more pages). IMPORTANT: passing 'folderID' changes the behavior — instead of listing top-level folders it DRILLS INTO that folder and returns its contents (subfolders/properties), which has a different shape. Omit 'folderID' to list the user's folders. Without 'folderID' the response has 'folders' (an array of folder records, each with its id and name), 'lastKey', and 'count'. Use get_folder_info for a single folder's full details and members."}, h.ListFolders)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_folder_members", Description: "List the collaborators (members) of a folder. Requires 'folderID' (a valid UUID or ULID); the caller needs folder:View permission on it. Returns 'members' — an array of collaboration records, each identifying a user and their access. Use this to see who a folder is shared with (e.g. before add_folder_member) or to get a member id to remove."}, h.GetFolderMembers)
+	mcp.AddTool(server, &mcp.Tool{Name: "add_property_to_folder", Description: "Link a property into a folder, either by MOVING it (re-link, so it leaves its previous folder) or COPYING it (clone into the folder, leaving the original in place). Requires 'folderID' (destination), 'propertyID' (the property to link), and 'mode' — exactly one of 'move' or 'copy'. When moving, pass 'previousFolderID' so the old link is cleaned up. When 'mode' is 'copy' you may also set 'copyDealStructure', 'copyDocuments', and/or 'copyComps' to true to clone those parts of the property (they are ignored for a move). The caller needs folder:ResourceManagement on the destination folder. Fails if the property is already in the folder. Returns the new folder-property link (a copy also includes the OriginalPropertyID)."}, h.AddPropertyToFolder)
+	mcp.AddTool(server, &mcp.Tool{Name: "add_folder_member", Description: "Add a single member (collaborator) to a folder, sharing the folder with them. Requires 'folderID' and 'memberID' (both valid UUID or ULID; 'memberID' is the user to add — use search_users to find their id). Optionally set 'existingPropertyAccess' to true to also grant the new member access to the properties ALREADY in the folder (default false = they only get access to properties added afterward). The caller needs folder:ResourceManagement on the folder. Fails if the user is already a member. Returns a confirmation message."}, h.AddFolderMember)
+	mcp.AddTool(server, &mcp.Tool{Name: "move_folder", Description: "Move a folder (together with its entire subtree of subfolders) under a new parent folder. Requires 'movingFolderID' (the folder to move) and 'targetFolderID' (the new parent), both valid UUID or ULID. Permission is enforced by the backend. This fails with a clear message when the move is invalid: moving a folder into itself, into one of its own descendants (cycle), exceeding the maximum nesting depth, or when the subtree is too large to move atomically. A no-op move (already a child of the target) succeeds without changes. Returns the updated folder and a summary of affected descendants."}, h.MoveFolder)
+	mcp.AddTool(server, &mcp.Tool{Name: "rename_folder", Description: "Rename a folder. Requires 'folderID' (a valid UUID or ULID) and the new 'name'. The caller needs folder:Edit permission on the folder. Returns a confirmation message. Confirm the new name with the user rather than guessing."}, h.RenameFolder)
+	mcp.AddTool(server, &mcp.Tool{Name: "delete_folder", Description: "Delete a folder AND its entire subtree (all nested subfolders). Requires 'folderID' (a valid UUID or ULID); the caller needs folder:Delete permission. THIS IS DESTRUCTIVE and cannot be undone — always confirm with the user which folder they mean (ideally by name via list_my_folders/get_folder_info) before calling, and never call it speculatively. Returns a confirmation message on success."}, h.DeleteFolder)
 
 }
