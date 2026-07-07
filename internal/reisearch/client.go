@@ -1231,47 +1231,11 @@ func (c *Client) AddCRMNote(ctx context.Context, token, propertyID, note, locati
 // The folder endpoints follow the same envelope as the rest of the API
 // ({success, message, data}). The payload shapes are dynamic maps: we only pass
 // them back through to the caller, so mirroring the large backend models buys
-// nothing. Query-param methods mirror CreateFolder; MoveFolder mirrors the
-// JSON-body pattern of RunComps.
+// nothing. These query-param methods mirror CreateFolder.
 
 // folderDataResponse decodes the standard envelope, leaving `data` dynamic.
 type folderDataResponse struct {
 	Data map[string]interface{} `json:"data"`
-}
-
-// GetFolderInfo fetches a folder's aggregate info (metadata + properties +
-// users + subfolders) in one call. folderID goes in the query string.
-func (c *Client) GetFolderInfo(ctx context.Context, token, folderID string) (map[string]interface{}, error) {
-	q := url.Values{}
-	q.Set("folder_id", folderID)
-
-	requrl := c.baseURL + "/connect/v1/folders/info?" + q.Encode()
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
-	if err != nil {
-		return nil, err
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get folder info failed: status %d, body %s", resp.StatusCode, respBody)
-	}
-
-	var parsed folderDataResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Data, nil
 }
 
 // FolderListPage is the tool-facing shape for the folder listing endpoints
@@ -1309,7 +1273,7 @@ func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastK
 		q.Set("folder_id", folderID)
 	}
 
-	requrl := c.baseURL + "/connect/v1/folders"
+	requrl := c.baseURL + "/connect/v1/folders/all"
 	if encoded := q.Encode(); encoded != "" {
 		requrl += "?" + encoded
 	}
@@ -1498,83 +1462,3 @@ func (c *Client) AddFolderMember(ctx context.Context, token, folderID, memberID 
 	return parsed.Data, nil
 }
 
-// MoveFolderRequest is the JSON body for POST /folders/move.
-type MoveFolderRequest struct {
-	MovingFolderID string `json:"moving_folder_id"`
-	TargetFolderID string `json:"target_folder_id"`
-}
-
-// MoveFolder moves a folder (with its whole subtree) under a new parent.
-// Unlike the other folder mutations this takes a JSON body. Permission is
-// enforced inside the backend service.
-func (c *Client) MoveFolder(ctx context.Context, token string, req MoveFolderRequest) (map[string]interface{}, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	requrl := c.baseURL + "/connect/v1/folders/move"
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("move folder failed: status %d, body %s", resp.StatusCode, respBody)
-	}
-
-	var parsed folderDataResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Data, nil
-}
-
-// RenameFolder renames a folder. Params go in the query string; the body is
-// empty.
-func (c *Client) RenameFolder(ctx context.Context, token, folderID, name string) (map[string]interface{}, error) {
-	q := url.Values{}
-	q.Set("folder_id", folderID)
-	q.Set("name", name)
-
-	requrl := c.baseURL + "/connect/v1/folders/rename?" + q.Encode()
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPut, requrl, nil)
-	if err != nil {
-		return nil, err
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rename folder failed: status %d, body %s", resp.StatusCode, respBody)
-	}
-
-	var parsed folderDataResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Data, nil
-}
