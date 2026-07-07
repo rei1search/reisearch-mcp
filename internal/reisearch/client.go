@@ -1578,38 +1578,3 @@ func (c *Client) RenameFolder(ctx context.Context, token, folderID, name string)
 	}
 	return parsed.Data, nil
 }
-
-// DeleteFolder deletes a folder and its entire subtree. folderID goes in the
-// query string.
-func (c *Client) DeleteFolder(ctx context.Context, token, folderID string) (map[string]interface{}, error) {
-	q := url.Values{}
-	q.Set("folder_id", folderID)
-
-	requrl := c.baseURL + "/connect/v1/folders?" + q.Encode()
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodDelete, requrl, nil)
-	if err != nil {
-		return nil, err
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("delete folder failed: status %d, body %s", resp.StatusCode, respBody)
-	}
-
-	var parsed folderDataResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, err
-	}
-	return parsed.Data, nil
-}

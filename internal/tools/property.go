@@ -587,25 +587,6 @@ func (h *PropertyHandler) RenameFolder(ctx context.Context, req *mcp.CallToolReq
 	return nil, result, nil
 }
 
-// DeleteFolderInput drives delete_folder. FolderID is required.
-type DeleteFolderInput struct {
-	FolderID string `json:"folderID"`
-}
-
-func (h *PropertyHandler) DeleteFolder(ctx context.Context, req *mcp.CallToolRequest, input DeleteFolderInput) (*mcp.CallToolResult, map[string]interface{}, error) {
-	token := TokenFromContext(ctx)
-
-	if input.FolderID == "" {
-		return nil, nil, fmt.Errorf("folderID is required")
-	}
-
-	result, err := h.client.DeleteFolder(ctx, token, input.FolderID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return nil, result, nil
-}
-
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -635,6 +616,5 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "add_folder_member", Description: "Add a single member (collaborator) to a folder, sharing the folder with them. Requires 'folderID' and 'memberID' (both valid UUID or ULID; 'memberID' is the user to add — use search_users to find their id). Optionally set 'existingPropertyAccess' to true to also grant the new member access to the properties ALREADY in the folder (default false = they only get access to properties added afterward). The caller needs folder:ResourceManagement on the folder. Fails if the user is already a member. Returns a confirmation message."}, h.AddFolderMember)
 	mcp.AddTool(server, &mcp.Tool{Name: "move_folder", Description: "Move a folder (together with its entire subtree of subfolders) under a new parent folder. Requires 'movingFolderID' (the folder to move) and 'targetFolderID' (the new parent), both valid UUID or ULID. Permission is enforced by the backend. This fails with a clear message when the move is invalid: moving a folder into itself, into one of its own descendants (cycle), exceeding the maximum nesting depth, or when the subtree is too large to move atomically. A no-op move (already a child of the target) succeeds without changes. Returns the updated folder and a summary of affected descendants."}, h.MoveFolder)
 	mcp.AddTool(server, &mcp.Tool{Name: "rename_folder", Description: "Rename a folder. Requires 'folderID' (a valid UUID or ULID) and the new 'name'. The caller needs folder:Edit permission on the folder. Returns a confirmation message. Confirm the new name with the user rather than guessing."}, h.RenameFolder)
-	mcp.AddTool(server, &mcp.Tool{Name: "delete_folder", Description: "Delete a folder AND its entire subtree (all nested subfolders). Requires 'folderID' (a valid UUID or ULID); the caller needs folder:Delete permission. THIS IS DESTRUCTIVE and cannot be undone — always confirm with the user which folder they mean (ideally by name via list_my_folders/get_folder_info) before calling, and never call it speculatively. Returns a confirmation message on success."}, h.DeleteFolder)
 
 }
