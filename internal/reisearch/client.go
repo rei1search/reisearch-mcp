@@ -535,7 +535,7 @@ func (c *Client) SearchUsers(ctx context.Context, token, name, expertise, city s
 		q.Set("lastCursor", lastCursor)
 	}
 
-	requrl := c.baseURL + "/connect/v1/search/users"
+	requrl := c.baseURL + "/connect/v1/search/connections"
 	if encoded := q.Encode(); encoded != "" {
 		requrl += "?" + encoded
 	}
@@ -1194,7 +1194,7 @@ func (c *Client) AddCRMNote(ctx context.Context, token, propertyID, note, locati
 		return nil, err
 	}
 
-	requrl := c.baseURL + "/connect/v1/crm/properties/" + url.PathEscape(propertyID) + "/notes"
+	requrl := c.baseURL + "/connect/v1/crm/properties/" + url.PathEscape(propertyID) + "/crm-notes"
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, requrl, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -1224,6 +1224,66 @@ func (c *Client) AddCRMNote(ctx context.Context, token, propertyID, note, locati
 	return &parsed.Data, nil
 }
 
+// CallActivityResult is the shape of GET /crm/property-call-activity/{id}: the
+// CRM contacts linked to a property, each enriched with its call activity. Each
+// record ({locationId, contactId, accountName, callData}) is a dynamic map since
+// callData is a verbatim upstream passthrough.
+type CallActivityResult struct {
+	PropertyID string                   `json:"propertyId"`
+	UserID     string                   `json:"userId"`
+	HasAccess  bool                     `json:"hasAccess"`
+	Count      int                      `json:"count"`
+	Records    []map[string]interface{} `json:"records"`
+}
+
+// GetPropertyCallActivity lists the CRM contacts linked to a property with their
+// call activity. The property id goes in the path; there is no locationId.
+func (c *Client) GetPropertyCallActivity(ctx context.Context, token, propertyID string) (*CallActivityResult, error) {
+	var out CallActivityResult
+	path := "/connect/v1/crm/property-call-activity/" + url.PathEscape(propertyID)
+	if err := c.crmGet(ctx, token, path, "", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetCallData fetches one call's full detail. callID contains a '#', so it must
+// be percent-encoded (url.PathEscape → %23) or everything after '#' is dropped
+// as a URL fragment. contactID and locationID are required query params.
+func (c *Client) GetCallData(ctx context.Context, token, callID, contactID, locationID string) (map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("contactId", contactID)
+	q.Set("locationId", locationID)
+	requrl := c.baseURL + "/connect/v1/crm/call-data/" + url.PathEscape(callID) + "?" + q.Encode()
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get call data failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+	var env struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		return nil, err
+	}
+	return env.Data, nil
+}
+
 // ---------------------------------------------------------------------------
 // Folders
 // ---------------------------------------------------------------------------
@@ -1238,12 +1298,10 @@ type folderDataResponse struct {
 	Data map[string]interface{} `json:"data"`
 }
 
-// FolderListPage is the tool-facing shape for the folder listing endpoints
-// (Myfolders / MyCreatedRootFolders / FavoriteFolders / SharedWithme). The
-// backend nests {data: {folders, last_key, count}} under the standard envelope;
-// we flatten it. When a folder_id is supplied, GET /folders returns that
-// folder's contents instead, which has a different shape — so ListFolders keeps
-// Folders dynamic and simply passes through whatever the backend sends.
+// FolderListPage is the tool-facing shape for the paginated root-folder listing
+// endpoints (/folders/all and /folders/created). The backend nests
+// {data: {folders, last_key, count}} under the standard envelope; we flatten it.
+// Drilling into a single folder is a different endpoint/shape — see FolderDetail.
 type FolderListPage struct {
 	Folders []map[string]interface{} `json:"folders"`
 	LastKey string                   `json:"lastKey,omitempty"`
@@ -1258,10 +1316,9 @@ type folderListResponse struct {
 	} `json:"data"`
 }
 
-// ListFolders lists the caller's folders (paginated). When folderID is set the
-// backend drills into that folder's contents instead of listing top-level
-// folders; the caller is responsible for interpreting the differing shape.
-func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastKey, folderID string) (*FolderListPage, error) {
+// listFoldersAtPath is the shared body for the paginated root-folder listing
+// endpoints (/folders/all and /folders/created), which share the same envelope.
+func (c *Client) listFoldersAtPath(ctx context.Context, token, path string, limit int, lastKey string) (*FolderListPage, error) {
 	q := url.Values{}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
@@ -1269,11 +1326,8 @@ func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastK
 	if lastKey != "" {
 		q.Set("last_key", lastKey)
 	}
-	if folderID != "" {
-		q.Set("folder_id", folderID)
-	}
 
-	requrl := c.baseURL + "/connect/v1/folders/all"
+	requrl := c.baseURL + path
 	if encoded := q.Encode(); encoded != "" {
 		requrl += "?" + encoded
 	}
@@ -1296,7 +1350,7 @@ func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastK
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list folders failed: status %d, body %s", resp.StatusCode, respBody)
+		return nil, fmt.Errorf("list folders %s failed: status %d, body %s", path, resp.StatusCode, respBody)
 	}
 
 	var parsed folderListResponse
@@ -1308,6 +1362,60 @@ func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastK
 		LastKey: parsed.Data.LastKey,
 		Count:   parsed.Data.Count,
 	}, nil
+}
+
+// ListFolders lists the caller's ROOT folders — every root folder they can
+// access, including ones shared with them. /folders/all no longer drills into a
+// folder (the folder_id param is ignored); use GetFolder to open one.
+func (c *Client) ListFolders(ctx context.Context, token string, limit int, lastKey string) (*FolderListPage, error) {
+	return c.listFoldersAtPath(ctx, token, "/connect/v1/folders/all", limit, lastKey)
+}
+
+// ListCreatedFolders lists the root folders the caller CREATED (vs ListFolders,
+// which lists every root folder they can access).
+func (c *Client) ListCreatedFolders(ctx context.Context, token string, limit int, lastKey string) (*FolderListPage, error) {
+	return c.listFoldersAtPath(ctx, token, "/connect/v1/folders/created", limit, lastKey)
+}
+
+// FolderDetail is the shape of GET /folders/{id}: the folder's own metadata plus
+// its direct subfolders and the properties it contains.
+type FolderDetail struct {
+	Folder     map[string]interface{}   `json:"folder"`
+	Folders    []map[string]interface{} `json:"folders"`
+	Properties []map[string]interface{} `json:"properties"`
+}
+
+// GetFolder drills into a single folder: its metadata plus direct subfolders and
+// the properties it contains. Returns 404 NOT_FOUND if the folder doesn't exist
+// or isn't visible to the caller.
+func (c *Client) GetFolder(ctx context.Context, token, folderID string) (*FolderDetail, error) {
+	requrl := c.baseURL + "/connect/v1/folders/" + url.PathEscape(folderID)
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get folder failed: status %d, body %s", resp.StatusCode, respBody)
+	}
+	var env struct {
+		Data FolderDetail `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		return nil, err
+	}
+	return &env.Data, nil
 }
 
 // FolderMembersResult wraps the members array in an object. The MCP SDK requires
@@ -1461,4 +1569,3 @@ func (c *Client) AddFolderMember(ctx context.Context, token, folderID, memberID 
 	}
 	return parsed.Data, nil
 }
-

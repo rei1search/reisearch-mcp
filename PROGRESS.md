@@ -11,6 +11,30 @@ this can be picked up on another machine. Last updated: 2026-07-07.
 - Latest commit on `main`: **`291b963`** (pushed). Deployed and confirmed
   working end-to-end.
 
+## 2026-07-08 — public-API sync (search / CRM / folders)
+
+Synced the MCP to the July-8 public-API changes. Tool count is now **27**.
+Verified `go build ./...`, gofmt, and every changed/new path + response shape
+cross-checked against `../reisearch-pub-client/public/openapi.yaml`. Not yet
+live-smoke-tested through `/mcp` (needs redeploy + a fresh token).
+
+Required fixes:
+- `search_users` → `GET /connect/v1/search/connections` (was `/search/users`;
+  tool name kept as `search_users`).
+- `add_crm_note` → `.../crm-notes` (was `.../notes`).
+- `list_my_folders` no longer drills in — `/folders/all` now ignores `folder_id`.
+  Dropped `folderID` from the tool; drilling in moved to `get_folder`.
+
+New tools:
+- `get_folder` — `GET /folders/{folder_id}` → `{folder, folders, properties}`.
+- `list_created_folders` — `GET /folders/created` (root folders I created).
+- `get_property_call_activity` — `GET /crm/property-call-activity/{propertyId}`
+  → CRM contacts + call activity (call_id feeds get_call_data).
+- `get_call_data` — `GET /crm/call-data/{callId}` (callId has a `#`,
+  percent-encoded client-side; contactId + locationId required).
+
+Refactor: `ListFolders` and `ListCreatedFolders` share a `listFoldersAtPath` helper.
+
 ## Architecture recap
 
 - This repo is the **MCP server** (`cmd/reisearch-http`). It does NOT talk to

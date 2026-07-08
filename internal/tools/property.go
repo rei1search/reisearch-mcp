@@ -414,19 +414,53 @@ func (h *PropertyHandler) AddCRMNote(ctx context.Context, req *mcp.CallToolReque
 // Folder tools
 // ---------------------------------------------------------------------------
 
-// ListFoldersInput drives list_my_folders. All fields are optional: Limit caps
-// the page, LastKey pages through results, and FolderID drills into a specific
-// folder's contents instead of listing top-level folders.
+// ListFoldersInput drives list_my_folders. Both fields are optional: Limit caps
+// the page and LastKey pages through results. Root listing only — drilling into a
+// folder moved to get_folder.
 type ListFoldersInput struct {
-	Limit    int    `json:"limit,omitempty"`
-	LastKey  string `json:"lastKey,omitempty"`
-	FolderID string `json:"folderID,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	LastKey string `json:"lastKey,omitempty"`
 }
 
 func (h *PropertyHandler) ListFolders(ctx context.Context, req *mcp.CallToolRequest, input ListFoldersInput) (*mcp.CallToolResult, *reisearch.FolderListPage, error) {
 	token := TokenFromContext(ctx)
 
-	page, err := h.client.ListFolders(ctx, token, input.Limit, input.LastKey, input.FolderID)
+	page, err := h.client.ListFolders(ctx, token, input.Limit, input.LastKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, page, nil
+}
+
+// GetFolderInput drives get_folder. FolderID is required.
+type GetFolderInput struct {
+	FolderID string `json:"folderID"`
+}
+
+func (h *PropertyHandler) GetFolder(ctx context.Context, req *mcp.CallToolRequest, input GetFolderInput) (*mcp.CallToolResult, *reisearch.FolderDetail, error) {
+	token := TokenFromContext(ctx)
+
+	if input.FolderID == "" {
+		return nil, nil, fmt.Errorf("folderID is required")
+	}
+
+	result, err := h.client.GetFolder(ctx, token, input.FolderID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// ListCreatedFoldersInput drives list_created_folders. Both fields are optional.
+type ListCreatedFoldersInput struct {
+	Limit   int    `json:"limit,omitempty"`
+	LastKey string `json:"lastKey,omitempty"`
+}
+
+func (h *PropertyHandler) ListCreatedFolders(ctx context.Context, req *mcp.CallToolRequest, input ListCreatedFoldersInput) (*mcp.CallToolResult, *reisearch.FolderListPage, error) {
+	token := TokenFromContext(ctx)
+
+	page, err := h.client.ListCreatedFolders(ctx, token, input.Limit, input.LastKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -519,6 +553,54 @@ func (h *PropertyHandler) AddFolderMember(ctx context.Context, req *mcp.CallTool
 	return nil, result, nil
 }
 
+// GetPropertyCallActivityInput drives get_property_call_activity. PropertyID is
+// required.
+type GetPropertyCallActivityInput struct {
+	PropertyID string `json:"propertyID"`
+}
+
+func (h *PropertyHandler) GetPropertyCallActivity(ctx context.Context, req *mcp.CallToolRequest, input GetPropertyCallActivityInput) (*mcp.CallToolResult, *reisearch.CallActivityResult, error) {
+	token := TokenFromContext(ctx)
+
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+
+	result, err := h.client.GetPropertyCallActivity(ctx, token, input.PropertyID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// GetCallDataInput drives get_call_data. All three fields are required; CallID
+// contains a '#' and is percent-encoded by the client.
+type GetCallDataInput struct {
+	CallID     string `json:"callId"`
+	ContactID  string `json:"contactId"`
+	LocationID string `json:"locationId"`
+}
+
+func (h *PropertyHandler) GetCallData(ctx context.Context, req *mcp.CallToolRequest, input GetCallDataInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+
+	if input.CallID == "" {
+		return nil, nil, fmt.Errorf("callId is required")
+	}
+	if input.ContactID == "" {
+		return nil, nil, fmt.Errorf("contactId is required")
+	}
+	if input.LocationID == "" {
+		return nil, nil, fmt.Errorf("locationId is required")
+	}
+
+	result, err := h.client.GetCallData(ctx, token, input.CallID, input.ContactID, input.LocationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -541,9 +623,13 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "create_crm_opportunity", Description: "Create an opportunity in a CRM pipeline for a contact that ALREADY exists in the CRM. The main use is to RETRY an opportunity after push_lead_to_crm reported a non-fatal failure (opportunity.created=false) — do NOT re-run push_lead_to_crm for that, because the contact already exists. Requires 'contactId' (the CRM contact id, e.g. the contactId returned by a previous push), 'pipelineId' (from get_crm_pipelines), 'name', and 'status' (one of open, won, lost, abandoned). 'locationId' is optional (required only when several CRMs are connected). Returns opportunityId plus the echoed locationId, pipelineId, contactId, name, and status."}, h.CreateCRMOpportunity)
 	mcp.AddTool(server, &mcp.Tool{Name: "add_crm_note", Description: "Add a note to the CRM contact created by a previous push of a property (push_lead_to_crm). Requires 'propertyID' (the ReiSearch property that was pushed) and 'note' (the note text). 'locationId' is optional (required only when several CRMs are connected). If the property was never pushed to the CRM this fails with 'PROPERTY_NOT_IN_CRM' — push it first with push_lead_to_crm. Returns propertyId, contactId, and locationId."}, h.AddCRMNote)
 
-	mcp.AddTool(server, &mcp.Tool{Name: "list_my_folders", Description: "List the current user's folders (paginated) — their folder/workspace view. All parameters are optional: 'limit' caps the page, 'lastKey' fetches the next page (pass the 'lastKey' from a previous response; an empty value means no more pages). IMPORTANT: passing 'folderID' changes the behavior — instead of listing the user's ROOT folders it OPENS that folder and returns its direct subfolders (in the user's custom order) plus its properties, which has a different shape. Omit 'folderID' to list the user's root folders. Without 'folderID' the response has 'folders' (an array of folder records, each with its id and name), 'lastKey', and 'count'. Use get_folder_members to see who a folder is shared with."}, h.ListFolders)
+	mcp.AddTool(server, &mcp.Tool{Name: "list_my_folders", Description: "List the current user's ROOT folders (paginated) — their folder/workspace view. This lists every root folder they can ACCESS, including folders shared with them; use list_created_folders for only the ones they created. All parameters are optional: 'limit' caps the page and 'lastKey' fetches the next page (pass the 'lastKey' from a previous response; an empty value means no more pages). Returns 'folders' (an array of folder records, each with its id and name), 'lastKey', and 'count'. This lists ROOT folders only — to OPEN a folder and see its subfolders and properties, call get_folder with that folder's id. Use get_folder_members to see who a folder is shared with."}, h.ListFolders)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_folder_members", Description: "List the collaborators (members) of a folder. Requires 'folderID' (a valid UUID or ULID); the caller needs folder:View permission on it. Returns 'members' — an array of collaboration records, each identifying a user and their access. Use this to see who a folder is shared with (e.g. before add_folder_member) or to get a member id to remove."}, h.GetFolderMembers)
 	mcp.AddTool(server, &mcp.Tool{Name: "add_property_to_folder", Description: "Link a property into a folder, either by MOVING it (re-link, so it leaves its previous folder) or COPYING it (clone into the folder, leaving the original in place). Requires 'folderID' (destination), 'propertyID' (the property to link), and 'mode' — exactly one of 'move' or 'copy'. When moving, pass 'previousFolderID' so the old link is cleaned up. When 'mode' is 'copy' you may also set 'copyDealStructure', 'copyDocuments', and/or 'copyComps' to true to clone those parts of the property (they are ignored for a move). The caller needs folder:ResourceManagement on the destination folder. Fails if the property is already in the folder. Returns the new folder-property link (a copy also includes the OriginalPropertyID)."}, h.AddPropertyToFolder)
 	mcp.AddTool(server, &mcp.Tool{Name: "add_folder_member", Description: "Add a single member (collaborator) to a folder, sharing the folder with them. Requires 'folderID' and 'memberID' (both valid UUID or ULID; 'memberID' is the user to add — use search_users to find their id). Optionally set 'existingPropertyAccess' to true to also grant the new member access to the properties ALREADY in the folder (default false = they only get access to properties added afterward). The caller needs folder:ResourceManagement on the folder. Fails if the user is already a member. Returns a confirmation message."}, h.AddFolderMember)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_folder", Description: "Open a single folder and return its contents: the folder's own metadata plus its direct subfolders and the properties it contains. Requires 'folderID'. Use list_my_folders (or list_created_folders) to get root folders, then this to drill into one. (Root listing no longer accepts a folderID — use this tool to open a folder.) Fails with NOT_FOUND if the folder doesn't exist or isn't visible to the user."}, h.GetFolder)
+	mcp.AddTool(server, &mcp.Tool{Name: "list_created_folders", Description: "List the root folders the current user CREATED (vs list_my_folders, which lists every root folder they can access, including ones shared with them). Paginated: optional 'limit' and 'lastKey' (pass the 'lastKey' from a previous response; an empty value means no more pages). Returns 'folders', 'lastKey', and 'count'."}, h.ListCreatedFolders)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_property_call_activity", Description: "List the CRM contacts linked to a property, each enriched with its call activity. Requires 'propertyID'. Returns 'hasAccess', 'count', and 'records' (each with locationId, contactId, accountName, and 'callData' containing the calls list — each call has call_id, call_direction, caller_name, created_at, duration, transcription_status). Fails with PROPERTY_ACCESS_DENIED if the user can't view the property (also the answer for an unknown/not-owned property). Use a call_id from a record's callData.calls[] with get_call_data to fetch that call's full transcript/summary."}, h.GetPropertyCallActivity)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_call_data", Description: "Fetch one call's full detail (transcript, summary fields, speaker labels, talk-time, recording link). Requires 'callId' (from a get_property_call_activity record's callData.calls[].call_id), 'contactId', and 'locationId' — all three required. Returns the raw call-detail object. Fails with CALL_NOT_FOUND if no such call. Note: the call id contains a '#'; pass it as-is — the client percent-encodes it."}, h.GetCallData)
 
 }
