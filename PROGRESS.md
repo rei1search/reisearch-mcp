@@ -11,6 +11,38 @@ this can be picked up on another machine. Last updated: 2026-07-07.
 - Latest commit on `main`: **`291b963`** (pushed). Deployed and confirmed
   working end-to-end.
 
+## 2026-07-17 — Buyers & Buy Boxes sync
+
+Added the Buyer + Buy Box tool set. **Tool count is now 41** (was 27). Mirrors the
+documented public surface only — deliberately NO buyer notes, NO deletes, NO
+`PUT /buyers/{id}/info` (excluded from the public docs).
+
+New tools (14):
+- Buyers: `create_buyer`, `list_buyers`, `get_buyer`, `update_buyer`
+- My buy boxes: `list_my_buyboxes`, `create_my_buyboxes`, `get_my_buybox`, `update_my_buybox`
+- Buyer buy boxes: `list_buyer_buyboxes`, `create_buyer_buyboxes`, `get_buyer_buybox`, `update_buyer_buybox`
+- Read any user's (deal matching): `get_user_buyboxes`, `get_buybox_details`
+
+Implementation notes:
+- **TS envelope** (`tsEnvelope`): these domains put `lastKey` TOP-LEVEL and can populate
+  `error` on a 2xx — a partial buy-box create returns 201 with `data`=created and
+  `error`=failed locations. Shared `tsGet`/`tsWrite` helpers; `BuyBoxCreateResult`
+  surfaces `created` + `failed` (per location). Buyer/box list types carry top-level `lastKey`.
+- Buy box = purchase criteria; ONE box per `locations[]` entry. `/me` = the user's OWN
+  criteria; `/buyers/{id}` = a buyer's; `/users/{id}` = read any (deal matching).
+- Path gotcha handled: literal `buyboxes` segment on `/buyers/buyboxes/{id}` and
+  `/users/buyboxes/{id}` vs the variable segment on `/buyers/{buyerID}/buyboxes`.
+- Tool inputs nest `criteria` (safe schema reflection, like `push_lead_to_crm`); the wire
+  request flattens it via embedding. List `limit` defaults to 50.
+- Verified vs `../reisearch-pub-client/public/openapi.yaml` (8 paths / 14 ops match; TS
+  envelope confirmed). go build + gofmt + registration smoke test pass. NOT yet live-tested
+  through `/mcp` (needs push → redeploy → fresh token; exercise the duplicate-location path
+  to see `failed`).
+
+Follow-ups: tell the docs session to bump the MCP page tool count (27 → 41) and add a
+Buyers/Buy Boxes group; `REISEARCH_MCP_DOCS.md` / `MCP_SERVER_REFERENCE.md` / the connect
+artifact also still say 27.
+
 ## 2026-07-08 — public-API sync (search / CRM / folders)
 
 Synced the MCP to the July-8 public-API changes. Tool count is now **27**.

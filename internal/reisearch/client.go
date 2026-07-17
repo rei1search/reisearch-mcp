@@ -1569,3 +1569,374 @@ func (c *Client) AddFolderMember(ctx context.Context, token, folderID, memberID 
 	}
 	return parsed.Data, nil
 }
+
+// ---------------------------------------------------------------------------
+// Buyers & Buy Boxes  (TS envelope: lastKey is TOP-LEVEL; error can be set on 2xx)
+// ---------------------------------------------------------------------------
+
+// tsEnvelope is the response wrapper the buyer/buybox domains use. Unlike the
+// standard envelope, lastKey is top-level and error can be populated on a 2xx
+// (a partial buy-box create returns 201 with data=created and error=failed).
+type tsEnvelope struct {
+	StatusCode  int             `json:"statusCode"`
+	Success     bool            `json:"success"`
+	Message     string          `json:"message"`
+	Error       json.RawMessage `json:"error"`
+	Data        json.RawMessage `json:"data"`
+	LastKey     *string         `json:"lastKey"`
+	RedirectURL string          `json:"redirectUrl"`
+}
+
+// FailedLocation is one entry of tsEnvelope.Error on a partial buybox create.
+type FailedLocation struct {
+	Location   string `json:"location"`
+	Message    string `json:"message"`
+	StatusCode int    `json:"statusCode"`
+}
+
+// Buyer is a contact record the caller owns (NOT a ReiSearch account).
+// Timestamps are epoch ms for new records but epoch SECONDS for legacy ones
+// (< 1e12 ⇒ seconds); buyerID is a UUID for new records, 32-char hex for legacy.
+type Buyer struct {
+	UserID      string `json:"userID"`
+	BuyerID     string `json:"buyerID"`
+	FirstName   string `json:"firstName"`
+	LastName    string `json:"lastName"`
+	Email       string `json:"email"`
+	PhoneNumber string `json:"phoneNumber"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+}
+
+// BuyersPage is the tool-facing shape for list_buyers (top-level lastKey).
+type BuyersPage struct {
+	Buyers  []Buyer `json:"buyers"`
+	LastKey string  `json:"lastKey,omitempty"`
+}
+
+// BuyerWriteRequest is the create/update body for a buyer (all optional).
+type BuyerWriteRequest struct {
+	FirstName   string `json:"firstName,omitempty"`
+	LastName    string `json:"lastName,omitempty"`
+	Email       string `json:"email,omitempty"`
+	PhoneNumber string `json:"phoneNumber,omitempty"`
+}
+
+// BuyBoxPage is the tool-facing shape for buy-box list endpoints. Boxes pass
+// through as generic maps so the model reads the criteria fields directly.
+type BuyBoxPage struct {
+	BuyBoxes []map[string]interface{} `json:"buyBoxes"`
+	LastKey  string                   `json:"lastKey,omitempty"`
+}
+
+// BuyBoxCreateResult carries created boxes AND per-location failures — one box
+// is created per locations[] entry, so a 201 can include both.
+type BuyBoxCreateResult struct {
+	Created []map[string]interface{} `json:"created"`
+	Failed  []FailedLocation         `json:"failed,omitempty"`
+	Message string                   `json:"message"`
+}
+
+// BuyBoxLocation is one entry of a create's locations[]. State is required;
+// per-location dealType/zipCode override the top-level criteria.
+type BuyBoxLocation struct {
+	State    string `json:"state"`
+	City     string `json:"city,omitempty"`
+	County   string `json:"county,omitempty"`
+	ZipCode  string `json:"zipCode,omitempty"`
+	Location string `json:"location,omitempty"`
+	DealType string `json:"dealType,omitempty"`
+}
+
+// BuyBoxConditions is the six-flag property-condition filter.
+type BuyBoxConditions struct {
+	FireDamaged      bool `json:"fireDamaged,omitempty"`
+	FloodDamaged     bool `json:"floodDamaged,omitempty"`
+	SolarPanels      bool `json:"solarPanels,omitempty"`
+	SwimmingPool     bool `json:"swimmingPool,omitempty"`
+	FloodZone        bool `json:"floodZone,omitempty"`
+	FoundationIssues bool `json:"foundationIssues,omitempty"`
+}
+
+// BuyBoxCriteria is the shared set of buy-box filter fields (create + update).
+// NEVER set address — the server computes it. yearBuilt*/beds*/baths* are
+// strings; money/sqft are numbers; hoa/occupancy are "yes"|"no"|"any".
+type BuyBoxCriteria struct {
+	DealType           string            `json:"dealType,omitempty"`
+	PropertyType       string            `json:"propertyType,omitempty"`
+	City               string            `json:"city,omitempty"`
+	State              string            `json:"state,omitempty"`
+	County             string            `json:"county,omitempty"`
+	Zipcode            string            `json:"zipcode,omitempty"`
+	PriceMin           int               `json:"priceMin,omitempty"`
+	PriceMax           int               `json:"priceMax,omitempty"`
+	EntryFeeMin        int               `json:"entryFeeMin,omitempty"`
+	EntryFeeMax        int               `json:"entryFeeMax,omitempty"`
+	MaxEntryFeePercent int               `json:"maxEntryFeePercent,omitempty"`
+	CashOnCashPercent  int               `json:"cashOnCashPercent,omitempty"`
+	YearBuiltMin       string            `json:"yearBuiltMin,omitempty"`
+	YearBuiltMax       string            `json:"yearBuiltMax,omitempty"`
+	BedsMin            string            `json:"bedsMin,omitempty"`
+	BedsMax            string            `json:"bedsMax,omitempty"`
+	BathsMin           string            `json:"bathsMin,omitempty"`
+	BathsMax           string            `json:"bathsMax,omitempty"`
+	PropertySqftMin    int               `json:"propertySqftMin,omitempty"`
+	PropertySqftMax    int               `json:"propertySqftMax,omitempty"`
+	LotSizeSqftMin     int               `json:"lotSizeSqftMin,omitempty"`
+	LotSizeSqftMax     int               `json:"lotSizeSqftMax,omitempty"`
+	RehabLevels        []string          `json:"rehabLevels,omitempty"`
+	ExitStrategies     []string          `json:"exitStrategies,omitempty"`
+	Hoa                string            `json:"hoa,omitempty"`
+	Occupancy          string            `json:"occupancy,omitempty"`
+	Conditions         *BuyBoxConditions `json:"conditions,omitempty"`
+}
+
+// BuyBoxCreateRequest is a create body: criteria (flattened) plus locations[].
+// One buy box is created per location entry.
+type BuyBoxCreateRequest struct {
+	BuyBoxCriteria
+	Locations []BuyBoxLocation `json:"locations"`
+}
+
+// tsGet does an authenticated GET to a TS-envelope endpoint with optional
+// limit/cursor, verifies success, and returns the raw data + top-level lastKey.
+func (c *Client) tsGet(ctx context.Context, token, path string, limit int, cursor string) (json.RawMessage, string, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	requrl := c.baseURL + path
+	if enc := q.Encode(); enc != "" {
+		requrl += "?" + enc
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requrl, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	var env tsEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, "", fmt.Errorf("GET %s: status %d, body %s", path, resp.StatusCode, body)
+	}
+	if !env.Success {
+		return nil, "", fmt.Errorf("GET %s failed (%d): %s", path, env.StatusCode, env.Message)
+	}
+	lastKey := ""
+	if env.LastKey != nil {
+		lastKey = *env.LastKey
+	}
+	return env.Data, lastKey, nil
+}
+
+// tsWrite does an authenticated POST/PATCH with a JSON body to a TS-envelope
+// endpoint and returns the parsed envelope for the caller to interpret (creates
+// must read error even on success).
+func (c *Client) tsWrite(ctx context.Context, token, method, path string, body interface{}) (*tsEnvelope, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var env tsEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("%s %s: status %d, body %s", method, path, resp.StatusCode, raw)
+	}
+	return &env, nil
+}
+
+// --- Buyers ---
+
+func (c *Client) CreateBuyer(ctx context.Context, token string, req BuyerWriteRequest) (*Buyer, error) {
+	env, err := c.tsWrite(ctx, token, http.MethodPost, "/connect/v1/buyers", req)
+	if err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("create buyer failed (%d): %s", env.StatusCode, env.Message)
+	}
+	var b Buyer
+	if err := json.Unmarshal(env.Data, &b); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (c *Client) ListBuyers(ctx context.Context, token string, limit int, cursor string) (*BuyersPage, error) {
+	data, lastKey, err := c.tsGet(ctx, token, "/connect/v1/buyers", limit, cursor)
+	if err != nil {
+		return nil, err
+	}
+	var buyers []Buyer
+	if len(data) > 0 && string(data) != "null" {
+		if err := json.Unmarshal(data, &buyers); err != nil {
+			return nil, err
+		}
+	}
+	return &BuyersPage{Buyers: buyers, LastKey: lastKey}, nil
+}
+
+func (c *Client) GetBuyer(ctx context.Context, token, buyerID string) (*Buyer, error) {
+	data, _, err := c.tsGet(ctx, token, "/connect/v1/buyers/"+url.PathEscape(buyerID), 0, "")
+	if err != nil {
+		return nil, err
+	}
+	var b Buyer
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (c *Client) UpdateBuyer(ctx context.Context, token, buyerID string, req BuyerWriteRequest) (*Buyer, error) {
+	env, err := c.tsWrite(ctx, token, http.MethodPatch, "/connect/v1/buyers/"+url.PathEscape(buyerID), req)
+	if err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("update buyer failed (%d): %s", env.StatusCode, env.Message)
+	}
+	var b Buyer
+	if err := json.Unmarshal(env.Data, &b); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// --- Buy boxes (shared helpers) ---
+
+// listBuyBoxes is the shared paginated buy-box list (TS envelope, top-level lastKey).
+func (c *Client) listBuyBoxes(ctx context.Context, token, path string, limit int, cursor string) (*BuyBoxPage, error) {
+	data, lastKey, err := c.tsGet(ctx, token, path, limit, cursor)
+	if err != nil {
+		return nil, err
+	}
+	var boxes []map[string]interface{}
+	if len(data) > 0 && string(data) != "null" {
+		if err := json.Unmarshal(data, &boxes); err != nil {
+			return nil, err
+		}
+	}
+	return &BuyBoxPage{BuyBoxes: boxes, LastKey: lastKey}, nil
+}
+
+// getBuyBox fetches a single buy box by path.
+func (c *Client) getBuyBox(ctx context.Context, token, path string) (map[string]interface{}, error) {
+	data, _, err := c.tsGet(ctx, token, path, 0, "")
+	if err != nil {
+		return nil, err
+	}
+	var box map[string]interface{}
+	if err := json.Unmarshal(data, &box); err != nil {
+		return nil, err
+	}
+	return box, nil
+}
+
+// createBuyBoxes posts a create body and surfaces per-location failures even on
+// a 2xx (partial success). The all-failed case returns the failed list rather
+// than a bare error so the model sees per-location reasons.
+func (c *Client) createBuyBoxes(ctx context.Context, token, path string, req BuyBoxCreateRequest) (*BuyBoxCreateResult, error) {
+	env, err := c.tsWrite(ctx, token, http.MethodPost, path, req)
+	if err != nil {
+		return nil, err
+	}
+	out := &BuyBoxCreateResult{Message: env.Message}
+	if len(env.Error) > 0 && string(env.Error) != "null" {
+		_ = json.Unmarshal(env.Error, &out.Failed)
+	}
+	if len(env.Data) > 0 && string(env.Data) != "null" {
+		_ = json.Unmarshal(env.Data, &out.Created)
+	}
+	if !env.Success && len(out.Failed) == 0 {
+		return nil, fmt.Errorf("create buyboxes failed (%d): %s", env.StatusCode, env.Message)
+	}
+	return out, nil
+}
+
+// updateBuyBox patches a single buy box's criteria and returns the updated box.
+func (c *Client) updateBuyBox(ctx context.Context, token, path string, criteria BuyBoxCriteria) (map[string]interface{}, error) {
+	env, err := c.tsWrite(ctx, token, http.MethodPatch, path, criteria)
+	if err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("update buybox failed (%d): %s", env.StatusCode, env.Message)
+	}
+	var box map[string]interface{}
+	if err := json.Unmarshal(env.Data, &box); err != nil {
+		return nil, err
+	}
+	return box, nil
+}
+
+// --- Buy boxes: mine (/me) ---
+
+func (c *Client) ListMyBuyBoxes(ctx context.Context, token string, limit int, cursor string) (*BuyBoxPage, error) {
+	return c.listBuyBoxes(ctx, token, "/connect/v1/me/buyboxes", limit, cursor)
+}
+
+func (c *Client) CreateMyBuyBoxes(ctx context.Context, token string, req BuyBoxCreateRequest) (*BuyBoxCreateResult, error) {
+	return c.createBuyBoxes(ctx, token, "/connect/v1/me/buyboxes", req)
+}
+
+func (c *Client) GetMyBuyBox(ctx context.Context, token, buyBoxID string) (map[string]interface{}, error) {
+	return c.getBuyBox(ctx, token, "/connect/v1/me/buyboxes/"+url.PathEscape(buyBoxID))
+}
+
+func (c *Client) UpdateMyBuyBox(ctx context.Context, token, buyBoxID string, criteria BuyBoxCriteria) (map[string]interface{}, error) {
+	return c.updateBuyBox(ctx, token, "/connect/v1/me/buyboxes/"+url.PathEscape(buyBoxID), criteria)
+}
+
+// --- Buy boxes: a buyer's (note the literal "buyboxes" segment on by-id paths) ---
+
+func (c *Client) ListBuyerBuyBoxes(ctx context.Context, token, buyerID string, limit int, cursor string) (*BuyBoxPage, error) {
+	return c.listBuyBoxes(ctx, token, "/connect/v1/buyers/"+url.PathEscape(buyerID)+"/buyboxes", limit, cursor)
+}
+
+func (c *Client) CreateBuyerBuyBoxes(ctx context.Context, token, buyerID string, req BuyBoxCreateRequest) (*BuyBoxCreateResult, error) {
+	return c.createBuyBoxes(ctx, token, "/connect/v1/buyers/"+url.PathEscape(buyerID)+"/buyboxes", req)
+}
+
+func (c *Client) GetBuyerBuyBox(ctx context.Context, token, buyBoxID string) (map[string]interface{}, error) {
+	return c.getBuyBox(ctx, token, "/connect/v1/buyers/buyboxes/"+url.PathEscape(buyBoxID))
+}
+
+func (c *Client) UpdateBuyerBuyBox(ctx context.Context, token, buyBoxID string, criteria BuyBoxCriteria) (map[string]interface{}, error) {
+	return c.updateBuyBox(ctx, token, "/connect/v1/buyers/buyboxes/"+url.PathEscape(buyBoxID), criteria)
+}
+
+// --- Buy boxes: read any user's (deal matching) ---
+
+func (c *Client) GetUserBuyBoxes(ctx context.Context, token, userID string, limit int, cursor string) (*BuyBoxPage, error) {
+	return c.listBuyBoxes(ctx, token, "/connect/v1/users/"+url.PathEscape(userID)+"/buyboxes", limit, cursor)
+}
+
+func (c *Client) GetBuyBoxDetails(ctx context.Context, token, buyBoxID string) (map[string]interface{}, error) {
+	return c.getBuyBox(ctx, token, "/connect/v1/users/buyboxes/"+url.PathEscape(buyBoxID))
+}

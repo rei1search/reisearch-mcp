@@ -601,6 +601,283 @@ func (h *PropertyHandler) GetCallData(ctx context.Context, req *mcp.CallToolRequ
 	return nil, result, nil
 }
 
+// ---------------------------------------------------------------------------
+// Buyers & Buy Boxes
+// ---------------------------------------------------------------------------
+
+// buyBoxListLimit is the default page size for buy-box/buyer lists — kept small
+// so a big result set doesn't blow up the model's context (server default 1000).
+const buyBoxListLimit = 50
+
+type CreateBuyerInput struct {
+	FirstName   string `json:"firstName,omitempty"`
+	LastName    string `json:"lastName,omitempty"`
+	Email       string `json:"email,omitempty"`
+	PhoneNumber string `json:"phoneNumber,omitempty"`
+}
+
+func (h *PropertyHandler) CreateBuyer(ctx context.Context, req *mcp.CallToolRequest, input CreateBuyerInput) (*mcp.CallToolResult, *reisearch.Buyer, error) {
+	token := TokenFromContext(ctx)
+	result, err := h.client.CreateBuyer(ctx, token, reisearch.BuyerWriteRequest{
+		FirstName: input.FirstName, LastName: input.LastName, Email: input.Email, PhoneNumber: input.PhoneNumber,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type ListBuyersInput struct {
+	Limit  int    `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+func (h *PropertyHandler) ListBuyers(ctx context.Context, req *mcp.CallToolRequest, input ListBuyersInput) (*mcp.CallToolResult, *reisearch.BuyersPage, error) {
+	token := TokenFromContext(ctx)
+	limit := input.Limit
+	if limit <= 0 {
+		limit = buyBoxListLimit
+	}
+	result, err := h.client.ListBuyers(ctx, token, limit, input.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetBuyerInput struct {
+	BuyerID string `json:"buyerID"`
+}
+
+func (h *PropertyHandler) GetBuyer(ctx context.Context, req *mcp.CallToolRequest, input GetBuyerInput) (*mcp.CallToolResult, *reisearch.Buyer, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyerID == "" {
+		return nil, nil, fmt.Errorf("buyerID is required")
+	}
+	result, err := h.client.GetBuyer(ctx, token, input.BuyerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type UpdateBuyerInput struct {
+	BuyerID     string `json:"buyerID"`
+	FirstName   string `json:"firstName,omitempty"`
+	LastName    string `json:"lastName,omitempty"`
+	Email       string `json:"email,omitempty"`
+	PhoneNumber string `json:"phoneNumber,omitempty"`
+}
+
+func (h *PropertyHandler) UpdateBuyer(ctx context.Context, req *mcp.CallToolRequest, input UpdateBuyerInput) (*mcp.CallToolResult, *reisearch.Buyer, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyerID == "" {
+		return nil, nil, fmt.Errorf("buyerID is required")
+	}
+	result, err := h.client.UpdateBuyer(ctx, token, input.BuyerID, reisearch.BuyerWriteRequest{
+		FirstName: input.FirstName, LastName: input.LastName, Email: input.Email, PhoneNumber: input.PhoneNumber,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// --- Buy boxes: mine ---
+
+type ListMyBuyBoxesInput struct {
+	Limit  int    `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+func (h *PropertyHandler) ListMyBuyBoxes(ctx context.Context, req *mcp.CallToolRequest, input ListMyBuyBoxesInput) (*mcp.CallToolResult, *reisearch.BuyBoxPage, error) {
+	token := TokenFromContext(ctx)
+	limit := input.Limit
+	if limit <= 0 {
+		limit = buyBoxListLimit
+	}
+	result, err := h.client.ListMyBuyBoxes(ctx, token, limit, input.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// CreateMyBuyBoxesInput drives create_my_buyboxes. One buy box is created per
+// entry in Locations (≥1 required). Criteria is the shared filter set applied to
+// all of them (per-location dealType/zipCode override it). Never set address.
+type CreateMyBuyBoxesInput struct {
+	Locations []reisearch.BuyBoxLocation `json:"locations"`
+	Criteria  reisearch.BuyBoxCriteria   `json:"criteria"`
+}
+
+func (h *PropertyHandler) CreateMyBuyBoxes(ctx context.Context, req *mcp.CallToolRequest, input CreateMyBuyBoxesInput) (*mcp.CallToolResult, *reisearch.BuyBoxCreateResult, error) {
+	token := TokenFromContext(ctx)
+	if len(input.Locations) == 0 {
+		return nil, nil, fmt.Errorf("at least one location is required")
+	}
+	result, err := h.client.CreateMyBuyBoxes(ctx, token, reisearch.BuyBoxCreateRequest{
+		BuyBoxCriteria: input.Criteria, Locations: input.Locations,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetMyBuyBoxInput struct {
+	BuyBoxID string `json:"buyBoxId"`
+}
+
+func (h *PropertyHandler) GetMyBuyBox(ctx context.Context, req *mcp.CallToolRequest, input GetMyBuyBoxInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyBoxID == "" {
+		return nil, nil, fmt.Errorf("buyBoxId is required")
+	}
+	result, err := h.client.GetMyBuyBox(ctx, token, input.BuyBoxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type UpdateMyBuyBoxInput struct {
+	BuyBoxID string                   `json:"buyBoxId"`
+	Criteria reisearch.BuyBoxCriteria `json:"criteria"`
+}
+
+func (h *PropertyHandler) UpdateMyBuyBox(ctx context.Context, req *mcp.CallToolRequest, input UpdateMyBuyBoxInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyBoxID == "" {
+		return nil, nil, fmt.Errorf("buyBoxId is required")
+	}
+	result, err := h.client.UpdateMyBuyBox(ctx, token, input.BuyBoxID, input.Criteria)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// --- Buy boxes: a buyer's ---
+
+type ListBuyerBuyBoxesInput struct {
+	BuyerID string `json:"buyerID"`
+	Limit   int    `json:"limit,omitempty"`
+	Cursor  string `json:"cursor,omitempty"`
+}
+
+func (h *PropertyHandler) ListBuyerBuyBoxes(ctx context.Context, req *mcp.CallToolRequest, input ListBuyerBuyBoxesInput) (*mcp.CallToolResult, *reisearch.BuyBoxPage, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyerID == "" {
+		return nil, nil, fmt.Errorf("buyerID is required")
+	}
+	limit := input.Limit
+	if limit <= 0 {
+		limit = buyBoxListLimit
+	}
+	result, err := h.client.ListBuyerBuyBoxes(ctx, token, input.BuyerID, limit, input.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type CreateBuyerBuyBoxesInput struct {
+	BuyerID   string                     `json:"buyerID"`
+	Locations []reisearch.BuyBoxLocation `json:"locations"`
+	Criteria  reisearch.BuyBoxCriteria   `json:"criteria"`
+}
+
+func (h *PropertyHandler) CreateBuyerBuyBoxes(ctx context.Context, req *mcp.CallToolRequest, input CreateBuyerBuyBoxesInput) (*mcp.CallToolResult, *reisearch.BuyBoxCreateResult, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyerID == "" {
+		return nil, nil, fmt.Errorf("buyerID is required")
+	}
+	if len(input.Locations) == 0 {
+		return nil, nil, fmt.Errorf("at least one location is required")
+	}
+	result, err := h.client.CreateBuyerBuyBoxes(ctx, token, input.BuyerID, reisearch.BuyBoxCreateRequest{
+		BuyBoxCriteria: input.Criteria, Locations: input.Locations,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetBuyerBuyBoxInput struct {
+	BuyBoxID string `json:"buyBoxId"`
+}
+
+func (h *PropertyHandler) GetBuyerBuyBox(ctx context.Context, req *mcp.CallToolRequest, input GetBuyerBuyBoxInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyBoxID == "" {
+		return nil, nil, fmt.Errorf("buyBoxId is required")
+	}
+	result, err := h.client.GetBuyerBuyBox(ctx, token, input.BuyBoxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type UpdateBuyerBuyBoxInput struct {
+	BuyBoxID string                   `json:"buyBoxId"`
+	Criteria reisearch.BuyBoxCriteria `json:"criteria"`
+}
+
+func (h *PropertyHandler) UpdateBuyerBuyBox(ctx context.Context, req *mcp.CallToolRequest, input UpdateBuyerBuyBoxInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyBoxID == "" {
+		return nil, nil, fmt.Errorf("buyBoxId is required")
+	}
+	result, err := h.client.UpdateBuyerBuyBox(ctx, token, input.BuyBoxID, input.Criteria)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+// --- Buy boxes: read any user's (deal matching) ---
+
+type GetUserBuyBoxesInput struct {
+	UserID string `json:"userId"`
+	Limit  int    `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+func (h *PropertyHandler) GetUserBuyBoxes(ctx context.Context, req *mcp.CallToolRequest, input GetUserBuyBoxesInput) (*mcp.CallToolResult, *reisearch.BuyBoxPage, error) {
+	token := TokenFromContext(ctx)
+	if input.UserID == "" {
+		return nil, nil, fmt.Errorf("userId is required")
+	}
+	limit := input.Limit
+	if limit <= 0 {
+		limit = buyBoxListLimit
+	}
+	result, err := h.client.GetUserBuyBoxes(ctx, token, input.UserID, limit, input.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetBuyBoxDetailsInput struct {
+	BuyBoxID string `json:"buyBoxId"`
+}
+
+func (h *PropertyHandler) GetBuyBoxDetails(ctx context.Context, req *mcp.CallToolRequest, input GetBuyBoxDetailsInput) (*mcp.CallToolResult, map[string]interface{}, error) {
+	token := TokenFromContext(ctx)
+	if input.BuyBoxID == "" {
+		return nil, nil, fmt.Errorf("buyBoxId is required")
+	}
+	result, err := h.client.GetBuyBoxDetails(ctx, token, input.BuyBoxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -631,5 +908,23 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "list_created_folders", Description: "List the root folders the current user CREATED (vs list_my_folders, which lists every root folder they can access, including ones shared with them). Paginated: optional 'limit' and 'lastKey' (pass the 'lastKey' from a previous response; an empty value means no more pages). Returns 'folders', 'lastKey', and 'count'."}, h.ListCreatedFolders)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_call_activity", Description: "List the CRM contacts linked to a property, each enriched with its call activity. Requires 'propertyID'. Returns 'hasAccess', 'count', and 'records' (each with locationId, contactId, accountName, and 'callData' containing the calls list — each call has call_id, call_direction, caller_name, created_at, duration, transcription_status). Fails with PROPERTY_ACCESS_DENIED if the user can't view the property (also the answer for an unknown/not-owned property). Use a call_id from a record's callData.calls[] with get_call_data to fetch that call's full transcript/summary."}, h.GetPropertyCallActivity)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_call_data", Description: "Fetch one call's full detail (transcript, summary fields, speaker labels, talk-time, recording link). Requires 'callId' (from a get_property_call_activity record's callData.calls[].call_id), 'contactId', and 'locationId' — all three required. Returns the raw call-detail object. Fails with CALL_NOT_FOUND if no such call. Note: the call id contains a '#'; pass it as-is — the client percent-encodes it."}, h.GetCallData)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "create_buyer", Description: "Create a BUYER — a contact record you keep of a cash buyer/investor (firstName, lastName, email, phoneNumber, all optional), like an address-book entry. A buyer is NOT a ReiSearch account. Returns the buyer with its 'buyerID' (used by the buyer buy-box tools). Check list_buyers first so you don't duplicate a contact."}, h.CreateBuyer)
+	mcp.AddTool(server, &mcp.Tool{Name: "list_buyers", Description: "List the buyers (contact records of cash buyers/investors) the current user keeps — like an address book of who buys, NOT ReiSearch accounts. Paginated: optional 'limit' (default 50) and 'cursor' (pass the previous response's 'lastKey'; an empty lastKey means no more pages). Returns 'buyers' (each with buyerID, name, email, phoneNumber) and 'lastKey'."}, h.ListBuyers)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_buyer", Description: "Get one buyer contact record by 'buyerID' (a buyer is a contact you keep, not a ReiSearch account). Returns the buyer; fails with 'Buyer not found' if it doesn't exist."}, h.GetBuyer)
+	mcp.AddTool(server, &mcp.Tool{Name: "update_buyer", Description: "Update a buyer contact record. Requires 'buyerID'; pass any subset of firstName/lastName/email/phoneNumber to change. Returns the updated buyer. There is no delete tool — remove buyers in the ReiSearch app."}, h.UpdateBuyer)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "list_my_buyboxes", Description: "List the CURRENT USER'S OWN buy boxes — their acquisition criteria (what THEY want to buy). NOT a buyer's boxes (use list_buyer_buyboxes for that). A buy box is a saved set of purchase criteria: location, deal type, property type, price range, beds/baths, sqft, year built, condition flags, rehab level, exit strategy. Paginated: optional 'limit' (default 50) and 'cursor' (previous 'lastKey'). Returns 'buyBoxes' and 'lastKey'."}, h.ListMyBuyBoxes)
+	mcp.AddTool(server, &mcp.Tool{Name: "create_my_buyboxes", Description: "Create buy box(es) for the CURRENT USER (their own acquisition criteria — what they want to buy). Provide 'locations' (an array, at least one) and a shared 'criteria' object — ONE buy box is created PER location entry. Each location needs 'state'; its 'dealType'/'zipCode' override the criteria. Field types in 'criteria': priceMin/priceMax, entryFeeMin/Max, propertySqftMin/Max, lotSizeSqftMin/Max are NUMBERS; yearBuiltMin/Max, bedsMin/Max, bathsMin/Max are STRINGS (e.g. '3'); rehabLevels/exitStrategies are arrays; hoa/occupancy are 'yes'|'no'|'any'; conditions is the six-flag object (fireDamaged, floodDamaged, solarPanels, swimmingPool, floodZone, foundationIssues). NEVER set 'address' — the server computes it. PARTIAL SUCCESS: the result can contain BOTH 'created' and 'failed' (per-location reasons, e.g. 'A BuyBox with the same location exists.'); relay failures calmly, not as a crash — 'created' still holds the successes."}, h.CreateMyBuyBoxes)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_my_buybox", Description: "Get one of the CURRENT USER'S OWN buy boxes by 'buyBoxId'. Returns the buy box criteria; fails with 'Buybox not found' if it doesn't exist."}, h.GetMyBuyBox)
+	mcp.AddTool(server, &mcp.Tool{Name: "update_my_buybox", Description: "Update one of the CURRENT USER'S OWN buy boxes. Requires 'buyBoxId' and a 'criteria' object holding any subset of buy-box fields to change (same field types as create_my_buyboxes; never send 'address'). Returns the updated buy box. No delete tool — use the ReiSearch app."}, h.UpdateMyBuyBox)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "list_buyer_buyboxes", Description: "List the buy boxes belonging to a BUYER on the user's list — what that buyer wants to purchase (vs list_my_buyboxes, which is the user's OWN criteria). Requires 'buyerID' (from list_buyers/create_buyer). Paginated: optional 'limit' (default 50) and 'cursor'. Returns 'buyBoxes' and 'lastKey'. Fails with 'Buyer not found' for an unknown buyer."}, h.ListBuyerBuyBoxes)
+	mcp.AddTool(server, &mcp.Tool{Name: "create_buyer_buyboxes", Description: "Create buy box(es) for a BUYER on the user's list (what that buyer wants to buy). Requires 'buyerID' plus 'locations' (≥1) and a shared 'criteria' object — one buy box per location. Same field types, 'address' rule, and PARTIAL-SUCCESS semantics as create_my_buyboxes (check 'failed'; a duplicate is reported as 'Duplicate buybox.')."}, h.CreateBuyerBuyBoxes)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_buyer_buybox", Description: "Get a single buyer's buy box by 'buyBoxId'. Returns the buy box; fails with 'Buybox not found.' if it doesn't exist."}, h.GetBuyerBuyBox)
+	mcp.AddTool(server, &mcp.Tool{Name: "update_buyer_buybox", Description: "Update a buyer's buy box. Requires 'buyBoxId' and a 'criteria' object (any subset to change). Returns the updated buy box; a change that collides with an existing box fails with 'Duplicate buybox in target state.' No delete tool — use the ReiSearch app."}, h.UpdateBuyerBuyBox)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "get_user_buyboxes", Description: "Read ANY user's buy boxes — this is the DEAL-MATCHING tool. Use it to find who would buy a property: first get the property's details with get_property_details, then compare them against a user's buy boxes here — state, price vs priceMin/priceMax, beds vs bedsMin/bedsMax, baths, propertyType. To match a deal across the user's CONNECTIONS (their network), list the connections with search_users (name/list → user.id), then call this for each connection's user id and compare each buy box to the property; report which connections' boxes fit. Requires 'userId'; optional 'limit' (default 50) and 'cursor'. An empty result means that user has no buy boxes."}, h.GetUserBuyBoxes)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_buybox_details", Description: "Get a single buy box by 'buyBoxId' (any user's) — the read companion to get_user_buyboxes for inspecting one box's full criteria. Returns the buy box; fails with 'Buybox not found' if it doesn't exist."}, h.GetBuyBoxDetails)
 
 }
