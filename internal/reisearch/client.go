@@ -1940,3 +1940,326 @@ func (c *Client) GetUserBuyBoxes(ctx context.Context, token, userID string, limi
 func (c *Client) GetBuyBoxDetails(ctx context.Context, token, buyBoxID string) (map[string]interface{}, error) {
 	return c.getBuyBox(ctx, token, "/connect/v1/users/buyboxes/"+url.PathEscape(buyBoxID))
 }
+
+// ---------------------------------------------------------------------------
+// Presentations & Templates (standard envelope; ISO-string timestamps)
+// ---------------------------------------------------------------------------
+
+// presDo performs an authenticated request against a presentations/templates
+// endpoint, verifies the expected status, and decodes the standard envelope's
+// `data` into out. Any other status surfaces the raw body (which carries the
+// backend's error.code/message) as a Go error.
+func (c *Client) presDo(ctx context.Context, token, method, path string, query url.Values, body interface{}, wantStatus int, out interface{}) error {
+	var rd io.Reader
+	if body != nil {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rd = bytes.NewReader(payload)
+	}
+	requrl := c.baseURL + path
+	if query != nil {
+		if enc := query.Encode(); enc != "" {
+			requrl += "?" + enc
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, method, requrl, rd)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != wantStatus {
+		return fmt.Errorf("%s %s failed: status %d, body %s", method, path, resp.StatusCode, respBody)
+	}
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		return err
+	}
+	if out != nil && len(env.Data) > 0 && string(env.Data) != "null" {
+		return json.Unmarshal(env.Data, out)
+	}
+	return nil
+}
+
+// PresPagination is the pagination block on presentation/template lists.
+// NextCursor decodes JSON null to "" — empty means last page; a non-empty
+// value must be passed back as `cursor`. An empty items page is NOT
+// end-of-data; only an empty NextCursor is.
+type PresPagination struct {
+	Limit      int    `json:"limit"`
+	Count      int    `json:"count"`
+	NextCursor string `json:"nextCursor,omitempty"`
+	HasNext    bool   `json:"hasNext"`
+}
+
+// PresentationItem is one presentation as returned by get/list/update.
+// Timestamps are ISO strings (not epoch). PublicURL is only populated on
+// get-by-id and update responses — list items always carry "".
+type PresentationItem struct {
+	PresentationID  string `json:"presentationId"`
+	Name            string `json:"name"`
+	PropertyID      string `json:"propertyId"`
+	TemplateID      string `json:"templateId,omitempty"`
+	ThumbnailURL    string `json:"thumbnailUrl,omitempty"`
+	SlideCount      int    `json:"slideCount"`
+	ViewCount       int    `json:"viewCount"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
+	PresentationURL string `json:"presentationUrl"`
+	ViewerURL       string `json:"viewerUrl"`
+	PublicURL       string `json:"publicUrl"`
+	RedirectURL     string `json:"redirectUrl"`
+}
+
+// PresentationsPage is the tool-facing shape for list_presentations.
+type PresentationsPage struct {
+	Items      []PresentationItem `json:"items"`
+	Pagination PresPagination     `json:"pagination"`
+}
+
+// CreatePresentationRequest is the POST /presentations body. PropertyID is
+// required, must be caller-owned, and is immutable after creation.
+type CreatePresentationRequest struct {
+	Title         string                 `json:"title,omitempty"`
+	PropertyID    string                 `json:"propertyId"`
+	TemplateID    string                 `json:"templateId,omitempty"`
+	HydrationData map[string]interface{} `json:"hydrationData,omitempty"`
+	Width         int                    `json:"width,omitempty"`
+	Height        int                    `json:"height,omitempty"`
+}
+
+// PresentationCreateResult is the create response. PublicURL is always ""
+// here — share links only exist after publish.
+type PresentationCreateResult struct {
+	PresentationID  string `json:"presentationId"`
+	Name            string `json:"name"`
+	PropertyID      string `json:"propertyId"`
+	Status          string `json:"status"`
+	PresentationURL string `json:"presentationUrl"`
+	ViewerURL       string `json:"viewerUrl"`
+	PublicURL       string `json:"publicUrl"`
+	RedirectURL     string `json:"redirectUrl"`
+	CreatedAt       string `json:"createdAt"`
+	Message         string `json:"message"`
+}
+
+// UpdatePresentationRequest is the PATCH body — rename/resize only; at least
+// one field must be set (the handler guards this).
+type UpdatePresentationRequest struct {
+	Title  string `json:"title,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+}
+
+// PublishPresentationRequest configures the public share link. The allow*
+// flags are *bool so "omitted" (backend default) is distinguishable from an
+// explicit false. NOTE: each publish REPLACES the whole share config.
+type PublishPresentationRequest struct {
+	Password     string `json:"password,omitempty"`
+	ExpiresAt    string `json:"expiresAt,omitempty"`
+	AllowExport  *bool  `json:"allowExport,omitempty"`
+	AllowPdf     *bool  `json:"allowPdf,omitempty"`
+	AllowAddress *bool  `json:"allowAddress,omitempty"`
+}
+
+// PublishResult is the publish/unpublish response (unpublish carries only
+// presentationId, published=false, and message).
+type PublishResult struct {
+	PresentationID    string `json:"presentationId"`
+	Published         bool   `json:"published"`
+	PublicURL         string `json:"publicUrl,omitempty"`
+	RedirectURL       string `json:"redirectUrl,omitempty"`
+	PasswordProtected bool   `json:"passwordProtected,omitempty"`
+	ExpiresAt         string `json:"expiresAt,omitempty"`
+	Message           string `json:"message"`
+}
+
+// PresentationContentResult carries a short-lived presigned link to the deck
+// JSON. ExpiresInSeconds is a guaranteed floor, not the exact lifetime.
+type PresentationContentResult struct {
+	PresentationID   string `json:"presentationId"`
+	ContentURL       string `json:"contentUrl"`
+	ExpiresInSeconds int    `json:"expiresInSeconds"`
+	SlideCount       int    `json:"slideCount"`
+	Message          string `json:"message"`
+}
+
+// ExportPdfRequest is the optional POST body starting a PDF export.
+// ShowAddress is *bool so omitted means "backend default".
+type ExportPdfRequest struct {
+	FileName    string `json:"fileName,omitempty"`
+	Password    string `json:"password,omitempty"`
+	ShowAddress *bool  `json:"showAddress,omitempty"`
+}
+
+// ExportPdfStartResult is the 202 payload of an export start.
+type ExportPdfStartResult struct {
+	PresentationID string `json:"presentationId"`
+	JobID          string `json:"jobId"`
+	Status         string `json:"status"`
+	StatusURL      string `json:"statusUrl"`
+	Message        string `json:"message"`
+}
+
+// ExportPdfStatusResult is a poll result. Status is processing|ready|failed;
+// DownloadURL is present iff Status is "ready" (API-guaranteed).
+type ExportPdfStatusResult struct {
+	PresentationID   string `json:"presentationId"`
+	JobID            string `json:"jobId"`
+	Status           string `json:"status"`
+	UpdatedAt        string `json:"updatedAt,omitempty"`
+	DownloadURL      string `json:"downloadUrl,omitempty"`
+	ExpiresInSeconds int    `json:"expiresInSeconds,omitempty"`
+	SizeKb           int    `json:"sizeKb,omitempty"`
+	Message          string `json:"message"`
+}
+
+// TemplateItem is one presentation/slide template.
+type TemplateItem struct {
+	TemplateID   string   `json:"templateId"`
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Tier         string   `json:"tier"`
+	Visibility   string   `json:"visibility"`
+	Category     string   `json:"category,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	ThumbnailURL string   `json:"thumbnailUrl,omitempty"`
+	SlideCount   int      `json:"slideCount"`
+	CreatedAt    string   `json:"createdAt"`
+	UpdatedAt    string   `json:"updatedAt"`
+}
+
+// TemplatesPage is the tool-facing shape for list_templates.
+type TemplatesPage struct {
+	Items      []TemplateItem `json:"items"`
+	Pagination PresPagination `json:"pagination"`
+}
+
+func (c *Client) CreatePresentation(ctx context.Context, token string, req CreatePresentationRequest) (*PresentationCreateResult, error) {
+	var out PresentationCreateResult
+	if err := c.presDo(ctx, token, http.MethodPost, "/connect/v1/presentations", nil, req, http.StatusCreated, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ListPresentations(ctx context.Context, token string, limit int, cursor string) (*PresentationsPage, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	var out PresentationsPage
+	if err := c.presDo(ctx, token, http.MethodGet, "/connect/v1/presentations", q, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetPresentation(ctx context.Context, token, presentationID string) (*PresentationItem, error) {
+	var out PresentationItem
+	if err := c.presDo(ctx, token, http.MethodGet, "/connect/v1/presentations/"+url.PathEscape(presentationID), nil, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdatePresentation(ctx context.Context, token, presentationID string, req UpdatePresentationRequest) (*PresentationItem, error) {
+	var out PresentationItem
+	if err := c.presDo(ctx, token, http.MethodPatch, "/connect/v1/presentations/"+url.PathEscape(presentationID), nil, req, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PublishPresentation(ctx context.Context, token, presentationID string, req PublishPresentationRequest) (*PublishResult, error) {
+	var out PublishResult
+	if err := c.presDo(ctx, token, http.MethodPost, "/connect/v1/presentations/"+url.PathEscape(presentationID)+"/publish", nil, req, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UnpublishPresentation(ctx context.Context, token, presentationID string) (*PublishResult, error) {
+	var out PublishResult
+	if err := c.presDo(ctx, token, http.MethodPost, "/connect/v1/presentations/"+url.PathEscape(presentationID)+"/unpublish", nil, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetPresentationContent(ctx context.Context, token, presentationID string) (*PresentationContentResult, error) {
+	var out PresentationContentResult
+	if err := c.presDo(ctx, token, http.MethodGet, "/connect/v1/presentations/"+url.PathEscape(presentationID)+"/content", nil, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ExportPresentationPDF(ctx context.Context, token, presentationID string, req ExportPdfRequest) (*ExportPdfStartResult, error) {
+	var out ExportPdfStartResult
+	if err := c.presDo(ctx, token, http.MethodPost, "/connect/v1/presentations/"+url.PathEscape(presentationID)+"/export-pdf", nil, req, http.StatusAccepted, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetPDFExportStatus(ctx context.Context, token, presentationID, jobID string) (*ExportPdfStatusResult, error) {
+	var out ExportPdfStatusResult
+	path := "/connect/v1/presentations/" + url.PathEscape(presentationID) + "/export-pdf/" + url.PathEscape(jobID)
+	if err := c.presDo(ctx, token, http.MethodGet, path, nil, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ListTemplates(ctx context.Context, token, scope, templateType, tier, category, search string, limit int, cursor string) (*TemplatesPage, error) {
+	q := url.Values{}
+	set := func(k, v string) {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	set("scope", scope)
+	set("type", templateType)
+	set("tier", tier)
+	set("category", category)
+	set("q", search)
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	set("cursor", cursor)
+	var out TemplatesPage
+	if err := c.presDo(ctx, token, http.MethodGet, "/connect/v1/templates", q, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetTemplate(ctx context.Context, token, templateID string) (*TemplateItem, error) {
+	var out TemplateItem
+	if err := c.presDo(ctx, token, http.MethodGet, "/connect/v1/templates/"+url.PathEscape(templateID), nil, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

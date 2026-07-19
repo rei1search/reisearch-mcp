@@ -11,6 +11,41 @@ this can be picked up on another machine. Last updated: 2026-07-07.
 - Latest commit on `main`: **`291b963`** (pushed). Deployed and confirmed
   working end-to-end.
 
+## 2026-07-19 — Presentations & Templates sync
+
+Added the presentations domain. **Tool count is now 52** (was 41). Mirrors the
+documented public surface MINUS delete: `DELETE /presentations/{id}` exists on
+the API but `delete_presentation` was deliberately NOT exposed (product call —
+deletion happens in the app; descriptions say so without claiming the API lacks it).
+
+New tools (11):
+- `create_presentation`, `list_presentations`, `get_presentation`, `update_presentation`
+- `publish_presentation`, `unpublish_presentation`
+- `get_presentation_content` (short-lived deck-JSON link)
+- `export_presentation_pdf` + `get_pdf_export_status` (async job: processing|ready|failed)
+- `list_templates`, `get_template`
+
+Implementation notes:
+- Standard envelope via a shared `presDo` helper (method/path/query/body/wantStatus
+  → decoded `data`). Timestamps are ISO strings (NOT epoch — differs from buyers).
+- Typed results incl. the four links; **publicUrl is only real on get-by-id/PATCH —
+  always "" on list items** (descriptions carry this).
+- Publish `allow*` flags and export `showAddress` are ***bool** (omitted ≠ false —
+  the useStoredData lesson). Publish REPLACES the whole share config each time.
+- Pagination: `limit` 1–100 (400 on out-of-range, never clamped; server default 20 —
+  passed through only when set), opaque endpoint/scope-bound cursors, empty page ≠
+  end (only empty nextCursor is), no propertyId filter on list (deliberate; filter
+  client-side).
+- PATCH 409 CONFLICT → descriptions tell the model to refetch + retry once.
+- Verified against `../reisearch-pub-client/public/openapi.yaml` (9 paths / field
+  names match). go build + gofmt + registration smoke test pass. NOT yet live-tested
+  through `/mcp` (needs push → redeploy → fresh token). Live test will leave one
+  `__mcp_test__` presentation behind (no delete tool) — clean up in the app.
+
+Follow-ups: docs bump is now 27→52 across REISEARCH_MCP_DOCS.md /
+MCP_SERVER_REFERENCE.md / the connect artifact; notify the docs session
+(add Presentations group). Gemini CLI verification still pending Abrham's run.
+
 ## 2026-07-17 — Buyers & Buy Boxes sync
 
 Added the Buyer + Buy Box tool set. **Tool count is now 41** (was 27). Mirrors the

@@ -878,6 +878,229 @@ func (h *PropertyHandler) GetBuyBoxDetails(ctx context.Context, req *mcp.CallToo
 	return nil, result, nil
 }
 
+// ---------------------------------------------------------------------------
+// Presentations & Templates
+// ---------------------------------------------------------------------------
+
+// CreatePresentationInput drives create_presentation. PropertyID is required
+// (caller-owned, immutable); everything else is optional.
+type CreatePresentationInput struct {
+	PropertyID    string                 `json:"propertyID"`
+	Title         string                 `json:"title,omitempty"`
+	TemplateID    string                 `json:"templateId,omitempty"`
+	HydrationData map[string]interface{} `json:"hydrationData,omitempty"`
+	Width         int                    `json:"width,omitempty"`
+	Height        int                    `json:"height,omitempty"`
+}
+
+func (h *PropertyHandler) CreatePresentation(ctx context.Context, req *mcp.CallToolRequest, input CreatePresentationInput) (*mcp.CallToolResult, *reisearch.PresentationCreateResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	result, err := h.client.CreatePresentation(ctx, token, reisearch.CreatePresentationRequest{
+		Title:         input.Title,
+		PropertyID:    input.PropertyID,
+		TemplateID:    input.TemplateID,
+		HydrationData: input.HydrationData,
+		Width:         input.Width,
+		Height:        input.Height,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type ListPresentationsInput struct {
+	Limit  int    `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+func (h *PropertyHandler) ListPresentations(ctx context.Context, req *mcp.CallToolRequest, input ListPresentationsInput) (*mcp.CallToolResult, *reisearch.PresentationsPage, error) {
+	token := TokenFromContext(ctx)
+	result, err := h.client.ListPresentations(ctx, token, input.Limit, input.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetPresentationInput struct {
+	PresentationID string `json:"presentationId"`
+}
+
+func (h *PropertyHandler) GetPresentation(ctx context.Context, req *mcp.CallToolRequest, input GetPresentationInput) (*mcp.CallToolResult, *reisearch.PresentationItem, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	result, err := h.client.GetPresentation(ctx, token, input.PresentationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type UpdatePresentationInput struct {
+	PresentationID string `json:"presentationId"`
+	Title          string `json:"title,omitempty"`
+	Width          int    `json:"width,omitempty"`
+	Height         int    `json:"height,omitempty"`
+}
+
+func (h *PropertyHandler) UpdatePresentation(ctx context.Context, req *mcp.CallToolRequest, input UpdatePresentationInput) (*mcp.CallToolResult, *reisearch.PresentationItem, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	if input.Title == "" && input.Width == 0 && input.Height == 0 {
+		return nil, nil, fmt.Errorf("provide at least one of: title, width, height")
+	}
+	result, err := h.client.UpdatePresentation(ctx, token, input.PresentationID, reisearch.UpdatePresentationRequest{
+		Title: input.Title, Width: input.Width, Height: input.Height,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type PublishPresentationInput struct {
+	PresentationID string `json:"presentationId"`
+	Password       string `json:"password,omitempty"`
+	ExpiresAt      string `json:"expiresAt,omitempty"`
+	AllowExport    *bool  `json:"allowExport,omitempty"`
+	AllowPdf       *bool  `json:"allowPdf,omitempty"`
+	AllowAddress   *bool  `json:"allowAddress,omitempty"`
+}
+
+func (h *PropertyHandler) PublishPresentation(ctx context.Context, req *mcp.CallToolRequest, input PublishPresentationInput) (*mcp.CallToolResult, *reisearch.PublishResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	result, err := h.client.PublishPresentation(ctx, token, input.PresentationID, reisearch.PublishPresentationRequest{
+		Password:     input.Password,
+		ExpiresAt:    input.ExpiresAt,
+		AllowExport:  input.AllowExport,
+		AllowPdf:     input.AllowPdf,
+		AllowAddress: input.AllowAddress,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type UnpublishPresentationInput struct {
+	PresentationID string `json:"presentationId"`
+}
+
+func (h *PropertyHandler) UnpublishPresentation(ctx context.Context, req *mcp.CallToolRequest, input UnpublishPresentationInput) (*mcp.CallToolResult, *reisearch.PublishResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	result, err := h.client.UnpublishPresentation(ctx, token, input.PresentationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetPresentationContentInput struct {
+	PresentationID string `json:"presentationId"`
+}
+
+func (h *PropertyHandler) GetPresentationContent(ctx context.Context, req *mcp.CallToolRequest, input GetPresentationContentInput) (*mcp.CallToolResult, *reisearch.PresentationContentResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	result, err := h.client.GetPresentationContent(ctx, token, input.PresentationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type ExportPresentationPDFInput struct {
+	PresentationID string `json:"presentationId"`
+	FileName       string `json:"fileName,omitempty"`
+	Password       string `json:"password,omitempty"`
+	ShowAddress    *bool  `json:"showAddress,omitempty"`
+}
+
+func (h *PropertyHandler) ExportPresentationPDF(ctx context.Context, req *mcp.CallToolRequest, input ExportPresentationPDFInput) (*mcp.CallToolResult, *reisearch.ExportPdfStartResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	result, err := h.client.ExportPresentationPDF(ctx, token, input.PresentationID, reisearch.ExportPdfRequest{
+		FileName: input.FileName, Password: input.Password, ShowAddress: input.ShowAddress,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetPDFExportStatusInput struct {
+	PresentationID string `json:"presentationId"`
+	JobID          string `json:"jobId"`
+}
+
+func (h *PropertyHandler) GetPDFExportStatus(ctx context.Context, req *mcp.CallToolRequest, input GetPDFExportStatusInput) (*mcp.CallToolResult, *reisearch.ExportPdfStatusResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PresentationID == "" {
+		return nil, nil, fmt.Errorf("presentationId is required")
+	}
+	if input.JobID == "" {
+		return nil, nil, fmt.Errorf("jobId is required")
+	}
+	result, err := h.client.GetPDFExportStatus(ctx, token, input.PresentationID, input.JobID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type ListTemplatesInput struct {
+	Scope    string `json:"scope,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Tier     string `json:"tier,omitempty"`
+	Category string `json:"category,omitempty"`
+	Q        string `json:"q,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+	Cursor   string `json:"cursor,omitempty"`
+}
+
+func (h *PropertyHandler) ListTemplates(ctx context.Context, req *mcp.CallToolRequest, input ListTemplatesInput) (*mcp.CallToolResult, *reisearch.TemplatesPage, error) {
+	token := TokenFromContext(ctx)
+	result, err := h.client.ListTemplates(ctx, token, input.Scope, input.Type, input.Tier, input.Category, input.Q, input.Limit, input.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
+type GetTemplateInput struct {
+	TemplateID string `json:"templateId"`
+}
+
+func (h *PropertyHandler) GetTemplate(ctx context.Context, req *mcp.CallToolRequest, input GetTemplateInput) (*mcp.CallToolResult, *reisearch.TemplateItem, error) {
+	token := TokenFromContext(ctx)
+	if input.TemplateID == "" {
+		return nil, nil, fmt.Errorf("templateId is required")
+	}
+	result, err := h.client.GetTemplate(ctx, token, input.TemplateID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -926,5 +1149,17 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "get_user_buyboxes", Description: "Read ANY user's buy boxes — this is the DEAL-MATCHING tool. Use it to find who would buy a property: first get the property's details with get_property_details, then compare them against a user's buy boxes here — state, price vs priceMin/priceMax, beds vs bedsMin/bedsMax, baths, propertyType. To match a deal across the user's CONNECTIONS (their network), list the connections with search_users (name/list → user.id), then call this for each connection's user id and compare each buy box to the property; report which connections' boxes fit. Requires 'userId'; optional 'limit' (default 50) and 'cursor'. An empty result means that user has no buy boxes."}, h.GetUserBuyBoxes)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_buybox_details", Description: "Get a single buy box by 'buyBoxId' (any user's) — the read companion to get_user_buyboxes for inspecting one box's full criteria. Returns the buy box; fails with 'Buybox not found' if it doesn't exist."}, h.GetBuyBoxDetails)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "create_presentation", Description: "Create a presentation (deck) for a property. Requires 'propertyID' — it must be a property the USER OWNS (a missing or someone-else's property fails with PROPERTY_NOT_FOUND, indistinguishable by design) and it CANNOT be changed after creation. Optional: 'title' (≤200 chars; defaults to 'Untitled Presentation'), 'templateId' (build from a template — find ids with list_templates; an unusable template fails with TEMPLATE_NOT_FOUND), 'hydrationData' (free-form object that fills the template's bindings; only meaningful with templateId), 'width'/'height' (pixels, 16–20000; server defaults when omitted). Returns the new presentationId plus links: 'presentationUrl' (the app EDITOR, sign-in required), 'viewerUrl' (authenticated read-only viewer), 'publicUrl' (ALWAYS empty on create — a public share link only exists after publish_presentation), and 'redirectUrl' (the safest single link to give the user). Relay the returned 'message'."}, h.CreatePresentation)
+	mcp.AddTool(server, &mcp.Tool{Name: "list_presentations", Description: "List the current user's presentations, newest first (paginated). Optional 'limit' (1–100, server default 20 — out-of-range values are REJECTED with 400, never clamped) and 'cursor' (pass the previous response's pagination.nextCursor). PAGINATION RULES: keep following nextCursor until it is empty — an EMPTY items page does NOT mean end-of-data (only an empty nextCursor does), and 'count' can be below the limit with more pages remaining; cursors are opaque and bound to THIS endpoint (a cursor minted elsewhere fails with 400). IMPORTANT: list items ALWAYS have publicUrl='' — that does NOT mean unpublished; call get_presentation to see a presentation's real share state. There is deliberately NO propertyId filter — to find a property's presentations, list and filter by items[].propertyId yourself. There is no delete tool — presentations are deleted in the ReiSearch app."}, h.ListPresentations)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_presentation", Description: "Get one presentation by 'presentationId' — including its REAL share state ('publicUrl' is populated here when published, unlike list items where it is always empty). Returns name, propertyId, slideCount, viewCount, width/height, ISO timestamps, and the links: presentationUrl (editor, sign-in), viewerUrl (authenticated viewer), publicUrl (public share page, empty when unpublished), redirectUrl (safest link to open). Fails with PRESENTATION_NOT_FOUND when missing, deleted, or another user's (indistinguishable by design)."}, h.GetPresentation)
+	mcp.AddTool(server, &mcp.Tool{Name: "update_presentation", Description: "Rename or resize a presentation. Requires 'presentationId' plus AT LEAST ONE of: 'title' (non-blank, ≤200 chars), 'width', 'height' (pixels 16–20000). The propertyId can never be changed. If it fails with a CONFLICT (409 — someone else updated it concurrently): call get_presentation to refetch, reapply the change, and retry ONCE. Returns the updated presentation including real share state. There is no delete tool — presentations are deleted in the ReiSearch app."}, h.UpdatePresentation)
+	mcp.AddTool(server, &mcp.Tool{Name: "publish_presentation", Description: "Create or refresh a presentation's PUBLIC share link (viewable without sign-in). Requires 'presentationId'. Optional settings: 'password' (4–128 chars — viewers must enter it to open the page), 'expiresAt' (RFC3339 and must be in the FUTURE, e.g. 2027-01-02T15:04:05Z), 'allowExport'/'allowPdf'/'allowAddress' (booleans; server defaults when omitted). CRITICAL: every publish REPLACES the ENTIRE share configuration — republishing WITHOUT 'password' REMOVES password protection; to change one setting, send the FULL desired state. Publishing after an unpublish restores the SAME link/slug. Returns 'publicUrl' (the shareable link), 'passwordProtected', and 'expiresAt'. Relay the 'message'."}, h.PublishPresentation)
+	mcp.AddTool(server, &mcp.Tool{Name: "unpublish_presentation", Description: "Disable a presentation's public share link. Requires 'presentationId'. IDEMPOTENT: unpublishing an already-unpublished presentation still succeeds (published:false; the message notes there was nothing to unpublish). Only public access stops — the editor and authenticated viewer links keep working, and publishing again later restores the SAME link/slug."}, h.UnpublishPresentation)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_presentation_content", Description: "Get a SHORT-LIVED download link for a presentation's deck content (the slides/elements/styling JSON). Requires 'presentationId'. Returns 'contentUrl' — download it directly with NO Authorization header (it is a presigned link) — plus 'expiresInSeconds' (a guaranteed FLOOR, 900 = 15 min) and 'slideCount'. Never store or reuse contentUrl later: call this tool again for a fresh link whenever one is needed."}, h.GetPresentationContent)
+	mcp.AddTool(server, &mcp.Tool{Name: "export_presentation_pdf", Description: "Start an ASYNCHRONOUS PDF export of a presentation (returns immediately; the PDF renders in the background). Requires 'presentationId'. Optional: 'fileName' (≤200 chars; quotes/slashes/control chars are stripped server-side, '.pdf' is appended; defaults to the presentation title), 'password' (4–128 chars — password-protects the PDF file itself), 'showAddress' (include the property address in the PDF). Returns 'jobId' with status 'processing' — POLL get_pdf_export_status every 2–3 seconds until 'ready' (exports typically take seconds up to about a minute). Only start a NEW export if a previous job reported 'failed' (failed is terminal)."}, h.ExportPresentationPDF)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_pdf_export_status", Description: "Check an asynchronous PDF export job. Requires 'presentationId' and 'jobId' (from export_presentation_pdf). 'status' is one of: 'processing' (keep polling every 2–3s), 'ready' ('downloadUrl' is GUARANTEED present — a presigned link that expires after ~'expiresInSeconds'; re-poll for a fresh link rather than storing it), or 'failed' (terminal — the only retry is starting a new export). An unknown jobId fails with EXPORT_JOB_NOT_FOUND. Relay the 'message'."}, h.GetPDFExportStatus)
+	mcp.AddTool(server, &mcp.Tool{Name: "list_templates", Description: "List presentation/slide templates — use an item's 'templateId' with create_presentation to build a deck from it. All parameters optional: 'scope' ('public' = the shared template library, the DEFAULT; 'mine' = only templates the user created), 'type' ('presentation' or 'slide'), 'tier' ('free' or 'premium'), 'category' (free text), 'q' (search text), 'limit' (1–100, default 20 — out-of-range is rejected, not clamped), 'cursor' (previous pagination.nextCursor). Cursors are bound to their SCOPE — a 'mine' cursor fails on 'public' and vice versa; follow nextCursor until empty (an empty page is not necessarily the end). Returns 'items' and 'pagination'."}, h.ListTemplates)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_template", Description: "Get one template by 'templateId'. Returns its name, type ('presentation'/'slide'), tier, visibility, category, tags, thumbnailUrl, and slideCount. Fails with TEMPLATE_NOT_FOUND when the template doesn't exist, is archived, or is another user's private template (indistinguishable by design)."}, h.GetTemplate)
 
 }
