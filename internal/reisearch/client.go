@@ -2263,3 +2263,56 @@ func (c *Client) GetTemplate(ctx context.Context, token, templateID string) (*Te
 	}
 	return &out, nil
 }
+
+// ---------------------------------------------------------------------------
+// Remove collaborator (inverse of ShareProperty)
+// ---------------------------------------------------------------------------
+
+// RemoveShareResult is the normalized outcome of removing a collaborator. The
+// backend returns an empty data payload, so we synthesize this: Status is
+// "removed" (HTTP 200) or "already_removed" (the idempotent 404 the docs say to
+// treat as success).
+type RemoveShareResult struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// RemoveSharedUser removes a collaborator from a property and revokes their
+// permissions. Success is HTTP 200. A 404 SHARED_USER_NOT_FOUND is normalized to
+// "already_removed" (benign, per the docs); every other non-200 (403 no
+// permission, 400 owner, 404 property, 500) is surfaced as a Go error carrying
+// the body.
+func (c *Client) RemoveSharedUser(ctx context.Context, token, propertyID, userID string) (*RemoveShareResult, error) {
+	requrl := c.baseURL + "/connect/v1/property/" + url.PathEscape(propertyID) + "/share/" + url.PathEscape(userID)
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodDelete, requrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		return &RemoveShareResult{Status: "removed", Message: "Collaborator removed."}, nil
+	}
+
+	// Idempotent case: the user is already not a collaborator → treat as success.
+	var env struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(respBody, &env) == nil && env.Error != nil && env.Error.Code == "SHARED_USER_NOT_FOUND" {
+		return &RemoveShareResult{Status: "already_removed", Message: env.Error.Message}, nil
+	}
+	return nil, fmt.Errorf("remove shared user failed: status %d, body %s", resp.StatusCode, respBody)
+}

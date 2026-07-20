@@ -11,6 +11,24 @@ this can be picked up on another machine. Last updated: 2026-07-07.
 - Latest commit on `main`: **`291b963`** (pushed). Deployed and confirmed
   working end-to-end.
 
+## 2026-07-20 — Remove-collaborator tool
+
+Added `remove_property_collaborator` (inverse of share_property). **Tool count 53.**
+`DELETE /connect/v1/property/{propertyID}/share/{userID}`.
+
+- First DESTRUCTIVE tool exposed — but reversible (re-add via share_property), unlike the
+  presentation delete we deliberately skipped. Gated three ways:
+  1. **description** tells the model to confirm with the user first (rung 1, client-independent);
+  2. **Annotations** `DestructiveHint`+`IdempotentHint` (rung 2 — protocol HINTS; clients MAY gate,
+     but per the SDK they're not guaranteed, so we don't rely on them alone);
+  3. **hard `confirm` gate** — the handler refuses unless `confirm=true` (rung 3, client-independent).
+- Idempotent `404 SHARED_USER_NOT_FOUND` normalized to `{status:"already_removed"}` (benign).
+- Needs `property:ManagePermissions` (stricter than share); the owner can't be removed.
+- First use of `mcp.ToolAnnotations` in this repo (DestructiveHint is a *bool — needs an address).
+- Route verified live (401 behind auth). build + gofmt + registration smoke test pass (53).
+  NOT yet live-tested through `/mcp` (needs push → redeploy → fresh token; session MCP conn
+  dropped, so test via curl as usual).
+
 ## 2026-07-19 — Presentations & Templates sync
 
 Added the presentations domain. **Tool count is now 52** (was 41). Mirrors the

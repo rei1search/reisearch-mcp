@@ -1101,6 +1101,34 @@ func (h *PropertyHandler) GetTemplate(ctx context.Context, req *mcp.CallToolRequ
 	return nil, result, nil
 }
 
+// RemovePropertyCollaboratorInput drives remove_property_collaborator.
+// PropertyID and UserID are required; Confirm is the safety gate (the handler
+// refuses without it — this is a destructive action).
+type RemovePropertyCollaboratorInput struct {
+	PropertyID string `json:"propertyID"`
+	UserID     string `json:"userID"`
+	Confirm    bool   `json:"confirm,omitempty"`
+}
+
+func (h *PropertyHandler) RemovePropertyCollaborator(ctx context.Context, req *mcp.CallToolRequest, input RemovePropertyCollaboratorInput) (*mcp.CallToolResult, *reisearch.RemoveShareResult, error) {
+	token := TokenFromContext(ctx)
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	if input.UserID == "" {
+		return nil, nil, fmt.Errorf("userID is required")
+	}
+	if !input.Confirm {
+		return nil, nil, fmt.Errorf("removing a collaborator is destructive — show the user exactly who will be removed, get their explicit yes, then call again with confirm=true")
+	}
+
+	result, err := h.client.RemoveSharedUser(ctx, token, input.PropertyID, input.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, result, nil
+}
+
 func Register(server *mcp.Server, client *reisearch.Client) {
 	h := &PropertyHandler{client: client}
 	mcp.AddTool(server, &mcp.Tool{Name: "create_property", Description: "Create a new property inside ReiSearch. Requires full property address"}, h.CreateProperty)
@@ -1161,5 +1189,12 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_pdf_export_status", Description: "Check an asynchronous PDF export job. Requires 'presentationId' and 'jobId' (from export_presentation_pdf). 'status' is one of: 'processing' (keep polling every 2–3s), 'ready' ('downloadUrl' is GUARANTEED present — a presigned link that expires after ~'expiresInSeconds'; re-poll for a fresh link rather than storing it), or 'failed' (terminal — the only retry is starting a new export). An unknown jobId fails with EXPORT_JOB_NOT_FOUND. Relay the 'message'."}, h.GetPDFExportStatus)
 	mcp.AddTool(server, &mcp.Tool{Name: "list_templates", Description: "List presentation/slide templates — use an item's 'templateId' with create_presentation to build a deck from it. All parameters optional: 'scope' ('public' = the shared template library, the DEFAULT; 'mine' = only templates the user created), 'type' ('presentation' or 'slide'), 'tier' ('free' or 'premium'), 'category' (free text), 'q' (search text), 'limit' (1–100, default 20 — out-of-range is rejected, not clamped), 'cursor' (previous pagination.nextCursor). Cursors are bound to their SCOPE — a 'mine' cursor fails on 'public' and vice versa; follow nextCursor until empty (an empty page is not necessarily the end). Returns 'items' and 'pagination'."}, h.ListTemplates)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_template", Description: "Get one template by 'templateId'. Returns its name, type ('presentation'/'slide'), tier, visibility, category, tags, thumbnailUrl, and slideCount. Fails with TEMPLATE_NOT_FOUND when the template doesn't exist, is archived, or is another user's private template (indistinguishable by design)."}, h.GetTemplate)
+
+	removeCollaboratorDestructive := true
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "remove_property_collaborator",
+		Description: "Remove a collaborator from a property/deal — deletes their access and revokes their permissions. This is the inverse of share_property. DESTRUCTIVE: before calling, show the user EXACTLY whose access will be removed and get their explicit confirmation, then pass 'confirm' = true (the tool refuses without it). Requires 'propertyID' (UUID/ULID), 'userID' (the collaborator to remove), and 'confirm'. The caller needs the property:ManagePermissions permission — this is STRICTER than sharing (which only needs property:AddUserToDeal), so usually only the property owner can remove collaborators. The property OWNER cannot be removed (fails). IDEMPOTENT: if the user is already not a collaborator, the result is status 'already_removed' — treat that as success, not an error. REVERSIBLE: you can re-add the person later with share_property (removal does not blacklist them). Returns { status: 'removed' | 'already_removed', message }.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: &removeCollaboratorDestructive, IdempotentHint: true},
+	}, h.RemovePropertyCollaborator)
 
 }
