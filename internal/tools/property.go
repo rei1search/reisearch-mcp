@@ -1197,4 +1197,5 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: &removeCollaboratorDestructive, IdempotentHint: true},
 	}, h.RemovePropertyCollaborator)
 
+	registerRenovationTools(server, h)
 }
