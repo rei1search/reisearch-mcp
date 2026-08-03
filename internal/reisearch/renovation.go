@@ -188,6 +188,36 @@ func (c *Client) TagPropertyImages(ctx context.Context, token, propertyID string
 	return &out, nil
 }
 
+type saveRenovationImageURLRequest struct {
+	ImageURL string `json:"image_url"`
+	TagType  string `json:"tag_type"`
+}
+
+// SaveRenovationImageResult is the save endpoint's response: the s3_key of the
+// stored render. The image is parked in S3 but NOT tracked until that s3_key is
+// passed to SubmitPropertyRenovation.
+type SaveRenovationImageResult struct {
+	S3Key string `json:"s3_key"`
+}
+
+// SaveRenovationImageFromURL saves a renovation render by pointing the backend at
+// a public http/https URL (the JSON-body form of POST .../image/renovation),
+// which it fetches server-side. The multipart byte-upload form of the same route
+// can't be driven from an MCP — a tool call is JSON, never a file body — so this
+// URL form is the only save path we expose. Returns the s3_key to hand to
+// SubmitPropertyRenovation. Fetch failures (unreachable, refused, timeout,
+// upstream 404) surface as one 400 the backend makes deliberately
+// indistinguishable.
+func (c *Client) SaveRenovationImageFromURL(ctx context.Context, token, propertyID, imageURL, tagType string) (*SaveRenovationImageResult, error) {
+	var out SaveRenovationImageResult
+	path := "/connect/v1/property/" + url.PathEscape(propertyID) + "/image/renovation"
+	body := saveRenovationImageURLRequest{ImageURL: imageURL, TagType: tagType}
+	if err := c.renoDo(ctx, token, http.MethodPost, path, nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // SubmitPropertyRenovation submits an already-uploaded render (by s3_key) plus
 // its cost estimate into the property's underwriting for the caller. Returns
 // the repairRenovation room data the backend wrote (dynamic map passthrough).
