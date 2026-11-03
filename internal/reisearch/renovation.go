@@ -88,10 +88,32 @@ type RenovationEstimate struct {
 	EstimateID  string               `json:"estimateId,omitempty"`
 }
 
+// submitRenovationRequest is the v6 submit body. Strategy is required; pick
+// the underwriting version with VersionID, or CreateNew + VersionName.
 type submitRenovationRequest struct {
-	S3Key    string             `json:"s3_key"`
-	TagType  string             `json:"tag_type"`
-	Estimate RenovationEstimate `json:"estimate"`
+	S3Key       string             `json:"s3_key"`
+	TagType     string             `json:"tag_type"`
+	Estimate    RenovationEstimate `json:"estimate"`
+	Strategy    string             `json:"strategy"`
+	VersionID   string             `json:"version_id,omitempty"`
+	CreateNew   bool               `json:"create_new,omitempty"`
+	VersionName string             `json:"version_name,omitempty"`
+}
+
+// RenovationSubmission carries the v6 strategy + version selection for
+// SubmitPropertyRenovation.
+type RenovationSubmission struct {
+	Strategy    string
+	VersionID   string
+	CreateNew   bool
+	VersionName string
+}
+
+// SubmitRenovationResult is the v6 submit response: the version the room was
+// written into plus the room data.
+type SubmitRenovationResult struct {
+	VersionID string                 `json:"versionId"`
+	Room      map[string]interface{} `json:"room"`
 }
 
 // RenovationLedger is the caller's per-property renovation state. Sections not
@@ -218,19 +240,27 @@ func (c *Client) SaveRenovationImageFromURL(ctx context.Context, token, property
 	return &out, nil
 }
 
-// SubmitPropertyRenovation submits an already-uploaded render (by s3_key) plus
-// its cost estimate into the property's underwriting for the caller. Returns
-// the repairRenovation room data the backend wrote (dynamic map passthrough).
-// A 500 "failed to submit renovation to underwriting" may not have landed —
-// retrying the same s3_key + tag_type is safe (the upsert is idempotent).
-func (c *Client) SubmitPropertyRenovation(ctx context.Context, token, propertyID, s3Key, tagType string, estimate RenovationEstimate) (map[string]interface{}, error) {
-	out := map[string]interface{}{}
+// SubmitPropertyRenovation submits an already-saved render (by s3_key) plus
+// its cost estimate into the caller's underwriting (v6: strategy + version
+// required). Returns { versionId, room }. NOT safe to blindly retry: with
+// CreateNew a retry makes a second version. The backend stores only what is
+// sent, so an omitted threadId/estimateId overwrites the stored one with "".
+func (c *Client) SubmitPropertyRenovation(ctx context.Context, token, propertyID, s3Key, tagType string, estimate RenovationEstimate, sub RenovationSubmission) (*SubmitRenovationResult, error) {
+	var out SubmitRenovationResult
 	path := "/connect/v1/property/" + url.PathEscape(propertyID) + "/image/renovation/submit"
-	body := submitRenovationRequest{S3Key: s3Key, TagType: tagType, Estimate: estimate}
+	body := submitRenovationRequest{
+		S3Key:       s3Key,
+		TagType:     tagType,
+		Estimate:    estimate,
+		Strategy:    sub.Strategy,
+		VersionID:   sub.VersionID,
+		CreateNew:   sub.CreateNew,
+		VersionName: sub.VersionName,
+	}
 	if err := c.renoDo(ctx, token, http.MethodPost, path, nil, body, &out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &out, nil
 }
 
 // GetRenovationLedger reads the caller's renovation ledger for a property.
