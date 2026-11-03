@@ -1198,4 +1198,5 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	}, h.RemovePropertyCollaborator)
 
 	registerRenovationTools(server, h)
+	registerUnderwritingTools(server, h)
 }
