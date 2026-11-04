@@ -11,18 +11,18 @@ import (
 	"strings"
 )
 
-// PropertyImage is a single image from GET /property/{id}/image: the stable
-// s3_key plus a short-lived presigned view URL. URL expires quickly — never
-// cache it; re-list for a fresh one. Timestamps are epoch milliseconds.
+// PropertyImage is a single image from GET /property/{id}/image (and the
+// upload response): the stable s3_key plus a presigned view URL valid for 15
+// minutes — never cache it; re-list for a fresh one. Type is "normal" or
+// "floor_plan". Timestamps are epoch milliseconds. Renovation tags are NOT on
+// images (they're per-user): read them from the renovation ledger.
 type PropertyImage struct {
-	S3Key            string                 `json:"s3_key"`
-	URL              string                 `json:"url,omitempty"`
-	CreatedAt        int64                  `json:"createdAt,omitempty"`
-	Source           string                 `json:"source,omitempty"`
-	Type             string                 `json:"type,omitempty"`
-	TagType          string                 `json:"tagType,omitempty"`
-	RenovationStatus string                 `json:"renovationStatus,omitempty"`
-	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+	S3Key     string                 `json:"s3_key"`
+	URL       string                 `json:"url,omitempty"`
+	CreatedAt int64                  `json:"createdAt,omitempty"`
+	Source    string                 `json:"source,omitempty"`
+	Type      string                 `json:"type,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // PropertyImagesResult wraps the images list (a bare-slice tool output panics

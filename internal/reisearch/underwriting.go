@@ -69,17 +69,17 @@ func UnderwritingSectionsFor(strategy string) []string {
 	return out
 }
 
-// UnderwritingAPIError is a non-2xx underwriting response, decoded from the
+// APIError is a non-2xx public-API response, decoded from the
 // standard envelope's error block so tools can branch on Status/Code.
-type UnderwritingAPIError struct {
+type APIError struct {
 	Status  int
 	Code    string
 	Message string
 	Details json.RawMessage
 }
 
-func (e *UnderwritingAPIError) Error() string {
-	msg := fmt.Sprintf("underwriting API error %d %s: %s", e.Status, e.Code, e.Message)
+func (e *APIError) Error() string {
+	msg := fmt.Sprintf("API error %d %s: %s", e.Status, e.Code, e.Message)
 	if len(e.Details) > 0 && string(e.Details) != "null" {
 		msg += " (details: " + string(e.Details) + ")"
 	}
@@ -106,11 +106,11 @@ func (v VersionSelector) apply(q url.Values) {
 	}
 }
 
-// uwDo performs an authenticated underwriting request. Unlike renoDo it
+// apiDo performs an authenticated public-API request (shared by the underwriting and media tools). Unlike renoDo it
 // accepts any 2xx (section create answers 201), and on failure returns an
-// *UnderwritingAPIError. It returns the envelope's raw `data` ("null" or empty
+// *APIError. It returns the envelope's raw `data` ("null" or empty
 // when the backend sent none).
-func (c *Client) uwDo(ctx context.Context, token, method, path string, query url.Values, body interface{}) (json.RawMessage, error) {
+func (c *Client) apiDo(ctx context.Context, token, method, path string, query url.Values, body interface{}) (json.RawMessage, error) {
 	requrl := c.baseURL + path
 	if encoded := query.Encode(); encoded != "" {
 		requrl += "?" + encoded
@@ -156,7 +156,7 @@ func (c *Client) uwDo(ctx context.Context, token, method, path string, query url
 	decodeErr := json.Unmarshal(respBody, &env)
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		apiErr := &UnderwritingAPIError{Status: resp.StatusCode, Message: strings.TrimSpace(string(respBody))}
+		apiErr := &APIError{Status: resp.StatusCode, Message: strings.TrimSpace(string(respBody))}
 		if decodeErr == nil && env.Error != nil {
 			apiErr.Code = env.Error.Code
 			apiErr.Message = env.Error.Message
@@ -165,7 +165,7 @@ func (c *Client) uwDo(ctx context.Context, token, method, path string, query url
 		return nil, apiErr
 	}
 	if decodeErr != nil {
-		return nil, fmt.Errorf("underwriting %s %s: unreadable response: %w", method, path, decodeErr)
+		return nil, fmt.Errorf("%s %s: unreadable response: %w", method, path, decodeErr)
 	}
 	return env.Data, nil
 }
@@ -226,7 +226,7 @@ func (c *Client) ListUnderwritingVersions(ctx context.Context, token, propertyID
 	if scope != "" {
 		q.Set("scope", scope)
 	}
-	raw, err := c.uwDo(ctx, token, http.MethodGet, uwBase(propertyID)+"/versions", q, nil)
+	raw, err := c.apiDo(ctx, token, http.MethodGet, uwBase(propertyID)+"/versions", q, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func (c *Client) CloneUnderwritingVersion(ctx context.Context, token, propertyID
 	if versionName != "" {
 		q.Set("versionName", versionName)
 	}
-	raw, err := c.uwDo(ctx, token, http.MethodPost, uwBase(propertyID)+"/postRenovation", q, nil)
+	raw, err := c.apiDo(ctx, token, http.MethodPost, uwBase(propertyID)+"/postRenovation", q, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +293,7 @@ func (c *Client) RenameUnderwritingVersion(ctx context.Context, token, propertyI
 	q := strategyQuery(strategy)
 	q.Set("versionId", versionID)
 	q.Set("versionName", versionName)
-	raw, err := c.uwDo(ctx, token, http.MethodPatch, uwBase(propertyID)+"/versions/rename", q, nil)
+	raw, err := c.apiDo(ctx, token, http.MethodPatch, uwBase(propertyID)+"/versions/rename", q, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +308,7 @@ func (c *Client) RenameUnderwritingVersion(ctx context.Context, token, propertyI
 func (c *Client) SetUnderwritingDealScore(ctx context.Context, token, propertyID, strategy, versionID string, score float64) (*VersionChangeResult, error) {
 	path := uwBase(propertyID) + "/versions/" + url.PathEscape(versionID) + "/dealScore"
 	body := map[string]float64{"dealScore": score}
-	raw, err := c.uwDo(ctx, token, http.MethodPatch, path, strategyQuery(strategy), body)
+	raw, err := c.apiDo(ctx, token, http.MethodPatch, path, strategyQuery(strategy), body)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +322,7 @@ func (c *Client) SetUnderwritingDealScore(ctx context.Context, token, propertyID
 // DeleteUnderwritingVersion removes a whole version and every section in it.
 func (c *Client) DeleteUnderwritingVersion(ctx context.Context, token, propertyID, strategy, versionID string) (*VersionChangeResult, error) {
 	path := uwBase(propertyID) + "/versions/" + url.PathEscape(versionID)
-	raw, err := c.uwDo(ctx, token, http.MethodDelete, path, strategyQuery(strategy), nil)
+	raw, err := c.apiDo(ctx, token, http.MethodDelete, path, strategyQuery(strategy), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func (c *Client) GetUnderwritingSection(ctx context.Context, token, propertyID, 
 	if versionID != "" {
 		q.Set("versionId", versionID)
 	}
-	raw, err := c.uwDo(ctx, token, http.MethodGet, uwBase(propertyID)+"/"+url.PathEscape(section), q, nil)
+	raw, err := c.apiDo(ctx, token, http.MethodGet, uwBase(propertyID)+"/"+url.PathEscape(section), q, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +364,7 @@ var uwBookkeepingKeys = []string{"propertyId", "createdById", "createdAt", "upda
 // for the strategy — INCLUDING collaborators' versions. Bookkeeping keys are
 // stripped from each section.
 func (c *Client) GetAllUnderwriting(ctx context.Context, token, propertyID, strategy string) ([]map[string]interface{}, error) {
-	raw, err := c.uwDo(ctx, token, http.MethodGet, uwBase(propertyID)+"/all", strategyQuery(strategy), nil)
+	raw, err := c.apiDo(ctx, token, http.MethodGet, uwBase(propertyID)+"/all", strategyQuery(strategy), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +405,7 @@ type CreateSectionResult struct {
 func (c *Client) CreateUnderwritingSection(ctx context.Context, token, propertyID, strategy, section string, sel VersionSelector, data map[string]interface{}) (*CreateSectionResult, error) {
 	q := strategyQuery(strategy)
 	sel.apply(q)
-	raw, err := c.uwDo(ctx, token, http.MethodPost, uwBase(propertyID)+"/"+url.PathEscape(section), q, data)
+	raw, err := c.apiDo(ctx, token, http.MethodPost, uwBase(propertyID)+"/"+url.PathEscape(section), q, data)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +432,7 @@ func (c *Client) UpdateUnderwritingSection(ctx context.Context, token, propertyI
 	sel.VersionName = "" // ignored by this route
 	sel.apply(q)
 	reqPath := uwBase(propertyID) + "/" + url.PathEscape(section) + "/" + url.PathEscape(path)
-	raw, err := c.uwDo(ctx, token, http.MethodPatch, reqPath, q, value)
+	raw, err := c.apiDo(ctx, token, http.MethodPatch, reqPath, q, value)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +503,7 @@ func roomPath(propertyID, area, tag string) string {
 func (c *Client) UpsertUnderwritingRoom(ctx context.Context, token, propertyID, strategy, area, tag string, sel VersionSelector, room UnderwritingRoom) (*RoomResult, error) {
 	q := strategyQuery(strategy)
 	sel.apply(q)
-	raw, err := c.uwDo(ctx, token, http.MethodPatch, roomPath(propertyID, area, tag), q, room)
+	raw, err := c.apiDo(ctx, token, http.MethodPatch, roomPath(propertyID, area, tag), q, room)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +526,7 @@ func (c *Client) DeleteUnderwritingRoom(ctx context.Context, token, propertyID, 
 	if versionID != "" {
 		q.Set("versionId", versionID)
 	}
-	raw, err := c.uwDo(ctx, token, http.MethodDelete, roomPath(propertyID, area, tag), q, nil)
+	raw, err := c.apiDo(ctx, token, http.MethodDelete, roomPath(propertyID, area, tag), q, nil)
 	if err != nil {
 		return nil, err
 	}

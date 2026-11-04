@@ -84,7 +84,7 @@ func requireVersionID(versionID string) error {
 
 // uwError adds a next-step hint to known underwriting API failures.
 func uwError(err error) error {
-	var apiErr *reisearch.UnderwritingAPIError
+	var apiErr *reisearch.APIError
 	if !errors.As(err, &apiErr) {
 		return err
 	}
@@ -102,7 +102,7 @@ func uwError(err error) error {
 // nonIdempotentError warns against blind retries when a create-type call
 // failed without a definite API answer (e.g. a timeout).
 func nonIdempotentError(err error) error {
-	var apiErr *reisearch.UnderwritingAPIError
+	var apiErr *reisearch.APIError
 	if errors.As(err, &apiErr) {
 		return uwError(err)
 	}

@@ -31,6 +31,15 @@ import (
 	"github.com/rei1search/reisearch-mcp/internal/reisearch"
 )
 
+// bearerTransport adds the Authorization header a real MCP client sends.
+type bearerTransport struct{ token string }
+
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
 type liveResult struct {
 	isError bool
 	text    string
@@ -49,9 +58,10 @@ func (h *liveHarness) call(name string, args map[string]any) liveResult {
 	if _, ok := args["propertyID"]; !ok {
 		args["propertyID"] = h.property
 	}
-	// Image/ledger tools take no strategy; the SDK rejects unknown arguments.
-	noStrategy := name == "save_renovation_image" || name == "get_renovation_ledger"
-	if _, ok := args["strategy"]; !ok && !noStrategy {
+	// Only underwriting tools (and the renovation submit) take a strategy; the
+	// SDK rejects unknown arguments on the others.
+	takesStrategy := strings.Contains(name, "underwriting") || name == "submit_property_renovation"
+	if _, ok := args["strategy"]; !ok && takesStrategy {
 		args["strategy"] = h.strategy
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -107,33 +117,65 @@ func dig(v any, keys ...string) any {
 	return v
 }
 
-func TestLiveUnderwriting(t *testing.T) {
+// newLiveHarness connects to the server under test (in-process, or the
+// deployed one when REISEARCH_LIVE_MCP_URL is set). It skips the test unless
+// REISEARCH_LIVE_TOKEN and REISEARCH_LIVE_PROPERTY are set. Shared by every
+// live test in this package.
+func newLiveHarness(t *testing.T) *liveHarness {
+	t.Helper()
 	token := os.Getenv("REISEARCH_LIVE_TOKEN")
 	property := os.Getenv("REISEARCH_LIVE_PROPERTY")
 	if token == "" || property == "" {
-		t.Skip("set REISEARCH_LIVE_TOKEN and REISEARCH_LIVE_PROPERTY to run the live underwriting test")
+		t.Skip("set REISEARCH_LIVE_TOKEN and REISEARCH_LIVE_PROPERTY to run live tests")
 	}
 	api := os.Getenv("REISEARCH_LIVE_API")
 	if api == "" {
 		api = "https://api-pub.reisearch.com"
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "reisearch-live", Version: "v0"}, nil)
-	Register(server, reisearch.NewClient(api))
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mcpHandler.ServeHTTP(w, r.WithContext(WithToken(r.Context(), token)))
-	}))
-	defer httpServer.Close()
+	// REISEARCH_LIVE_MCP_URL (e.g. https://mcp.reisearch.com/mcp) tests a
+	// DEPLOYED server instead: the token is sent as a real bearer header, so
+	// the server's JWT check is exercised too.
+	transport := &mcp.StreamableClientTransport{}
+	if remote := os.Getenv("REISEARCH_LIVE_MCP_URL"); remote != "" {
+		transport.Endpoint = remote
+		transport.HTTPClient = &http.Client{Transport: bearerTransport{token: token}, Timeout: 90 * time.Second}
+		t.Logf("testing DEPLOYED server at %s", remote)
+	} else {
+		server := mcp.NewServer(&mcp.Implementation{Name: "reisearch-live", Version: "v0"}, nil)
+		Register(server, reisearch.NewClient(api))
+		mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mcpHandler.ServeHTTP(w, r.WithContext(WithToken(r.Context(), token)))
+		}))
+		t.Cleanup(httpServer.Close)
+		transport.Endpoint = httpServer.URL
+	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "live-client", Version: "v0"}, nil)
-	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	session, err := client.Connect(context.Background(), transport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	t.Cleanup(func() { session.Close() })
 
-	h := &liveHarness{t: t, session: session, property: property, strategy: "fixFlip"}
+	// The deployed server must expose the full tool set.
+	toolCount := 0
+	for _, err := range session.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatalf("listing tools: %v", err)
+		}
+		toolCount++
+	}
+	t.Logf("server exposes %d tools", toolCount)
+	if toolCount != expectedToolCount {
+		t.Errorf("FAIL tool count: server exposes %d tools, want %d (is the new build deployed?)", toolCount, expectedToolCount)
+	}
+	return &liveHarness{t: t, session: session, property: property, strategy: "fixFlip"}
+}
+
+func TestLiveUnderwriting(t *testing.T) {
+	h := newLiveHarness(t)
 
 	// Delete every version we create, even if a later step fails.
 	created := map[string]bool{}
