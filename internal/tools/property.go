@@ -1200,4 +1200,5 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	registerRenovationTools(server, h)
 	registerUnderwritingTools(server, h)
 	registerMediaTools(server, h)
+	registerDocumentTools(server, h)
 }

@@ -17,7 +17,7 @@ func TestRegisterDoesNotPanic(t *testing.T) {
 	Register(server, &reisearch.Client{})
 }
 
-const expectedToolCount = 71
+const expectedToolCount = 74
 
 // TestRegisteredTools lists tools over an in-memory session (what a real
 // client sees) and checks the total and the underwriting tool names.
@@ -66,6 +66,9 @@ func TestRegisteredTools(t *testing.T) {
 		"submit_property_renovation",
 		"upload_property_image",
 		"remove_property_images",
+		"list_property_documents",
+		"get_property_document_upload_url",
+		"confirm_property_document_upload",
 	} {
 		if !names[name] {
 			t.Errorf("tool %q is not registered", name)
