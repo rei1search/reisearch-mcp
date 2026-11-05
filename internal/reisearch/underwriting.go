@@ -111,6 +111,11 @@ func (v VersionSelector) apply(q url.Values) {
 // *APIError. It returns the envelope's raw `data` ("null" or empty
 // when the backend sent none).
 func (c *Client) apiDo(ctx context.Context, token, method, path string, query url.Values, body interface{}) (json.RawMessage, error) {
+	return c.apiDoWithHeaders(ctx, token, method, path, query, body, nil)
+}
+
+// apiDoWithHeaders is apiDo with extra request headers (e.g. If-Match).
+func (c *Client) apiDoWithHeaders(ctx context.Context, token, method, path string, query url.Values, body interface{}, headers map[string]string) (json.RawMessage, error) {
 	requrl := c.baseURL + path
 	if encoded := query.Encode(); encoded != "" {
 		requrl += "?" + encoded
@@ -133,6 +138,9 @@ func (c *Client) apiDo(ctx context.Context, token, method, path string, query ur
 		httpRequest.Header.Set("Content-Type", "application/json")
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range headers {
+		httpRequest.Header.Set(k, v)
+	}
 
 	resp, err := c.httpClient.Do(httpRequest)
 	if err != nil {
