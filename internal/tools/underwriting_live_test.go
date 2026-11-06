@@ -55,7 +55,7 @@ type liveHarness struct {
 
 func (h *liveHarness) call(name string, args map[string]any) liveResult {
 	h.t.Helper()
-	if _, ok := args["propertyID"]; !ok {
+	if _, ok := args["propertyID"]; !ok && name != "invite_users" {
 		args["propertyID"] = h.property
 	}
 	// Only underwriting tools (and the renovation submit) take a strategy; the
