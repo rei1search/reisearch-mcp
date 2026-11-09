@@ -90,7 +90,9 @@ func TestLiveDirectUploads(t *testing.T) {
 		if !h.ok("confirm", conf) {
 			t.FailNow()
 		}
-		defer h.ok("cleanup: remove test photo", h.call("remove_property_images", map[string]any{"keys": []any{key}}))
+		defer func() {
+			h.ok("cleanup: remove test photo", h.call("remove_property_images", map[string]any{"keys": []any{key}}))
+		}()
 		if dig(conf.data, "image", "s3_key") != key || dig(conf.data, "image", "type") != "floor_plan" || dig(conf.data, "image", "url") == nil {
 			t.Errorf("FAIL confirm: unexpected image %v", conf.data["image"])
 		}
@@ -109,7 +111,7 @@ func TestLiveDirectUploads(t *testing.T) {
 
 	t.Run("renovation render", func(t *testing.T) {
 		h.failsWith("upload-url: blank tag", h.call("get_renovation_image_upload_url", map[string]any{"file_name": "r.png", "tag_type": " "}), "tag_type is required")
-		h.failsWith("upload-url: bad tag", h.call("get_renovation_image_upload_url", map[string]any{"file_name": "r.png", "tag_type": "not a tag"}), "canonical room tag")
+		h.failsWith("upload-url: bad tag", h.call("get_renovation_image_upload_url", map[string]any{"file_name": "r.png", "tag_type": ":1"}), "canonical room tag")
 		h.failsWith("confirm: foreign key", h.call("confirm_renovation_image_upload", map[string]any{"s3_key": "properties/" + foreign + "/generated/x/img-1.png"}), "THIS propertyID")
 
 		up := h.call("get_renovation_image_upload_url", map[string]any{"file_name": "kitchen-render.png", "tag_type": "kitchen:1"})
