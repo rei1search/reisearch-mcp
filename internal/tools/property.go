@@ -1201,6 +1201,7 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	registerUnderwritingTools(server, h)
 	registerMediaTools(server, h)
 	registerDocumentTools(server, h)
+	registerDirectUploadTools(server, h)
 	registerPropertyUpdateTool(server, h)
 	registerInvitationTools(server, h)
 }

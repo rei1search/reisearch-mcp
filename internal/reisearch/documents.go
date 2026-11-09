@@ -8,9 +8,9 @@ import (
 )
 
 // Property documents: listing, and the direct-to-S3 upload flow
-// (upload-url → caller PUTs the bytes → confirm). The multipart
-// POST /property/{id}/document can't be driven from an MCP tool call, so it
-// isn't wrapped. There is no document delete endpoint. Uses apiDo from
+// (upload-url → caller PUTs the bytes → confirm), and the JSON URL-fetch form
+// of POST /property/{id}/document. The multipart form can't be driven from an
+// MCP tool call, so it isn't wrapped. There is no document delete endpoint. Uses apiDo from
 // underwriting.go so failures come back as *APIError.
 
 // PropertyDocumentCategories mirrors allowedDocumentCategories in the public
@@ -106,6 +106,27 @@ func (c *Client) CreatePropertyDocumentUploadURL(ctx context.Context, token, pro
 		return nil, err
 	}
 	var out DocumentUploadURL
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UploadPropertyDocumentFromURL has the API fetch a public URL and append the
+// file to a category (the JSON form of POST /property/{id}/document).
+// fileName "" = name from Content-Disposition or the URL path. NOT idempotent:
+// every success adds another entry. Fetch failures all come back as one 400
+// "document_url could not be fetched".
+func (c *Client) UploadPropertyDocumentFromURL(ctx context.Context, token, propertyID, documentURL, fileName, category string) (*PropertyDocument, error) {
+	body := map[string]string{"document_url": documentURL, "category": category}
+	if fileName != "" {
+		body["file_name"] = fileName
+	}
+	raw, err := c.apiDo(ctx, token, http.MethodPost, documentPath(propertyID), url.Values{}, body)
+	if err != nil {
+		return nil, err
+	}
+	var out PropertyDocument
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

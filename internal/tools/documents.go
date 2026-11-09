@@ -40,6 +40,14 @@ func documentError(err error) error {
 	}
 	details := string(apiErr.Details)
 	switch {
+	case strings.Contains(apiErr.Message, "could not be fetched"):
+		return fmt.Errorf("%w — NOTHING was added: the server couldn't download that URL (unreachable, refused, timed out, not found, or over 20 MB). Ask the user for a public, direct link to the file; if they have the file itself, use get_property_document_upload_url instead", err)
+	case strings.Contains(details, "could not determine the file type"):
+		return fmt.Errorf("%w — pass 'file_name' with the right extension, e.g. 'Inspection Report.pdf'", err)
+	case strings.Contains(details, "not supported for URL upload"):
+		return fmt.Errorf("%w — URL uploads accept only pdf, doc(x), xls(x), ppt(x), odt/ods/odp, txt, csv, md, rtf, jpg, jpeg, png, gif, webp, bmp. For other types (video, RAW, tif, heic, svg) use get_property_document_upload_url with the file itself", err)
+	case strings.Contains(details, "does not match its"):
+		return fmt.Errorf("%w — the link doesn't serve the file it claims (often an HTML login or preview page). Ask for a direct download link", err)
 	case strings.Contains(apiErr.Message, "No file found at s3_key"):
 		return fmt.Errorf("%w — the file isn't in storage yet: PUT the bytes to upload_url (with the returned Content-Type header) and check it answered 200 before confirming. If the 15-minute upload_url expired, call get_property_document_upload_url again", err)
 	case strings.Contains(details, "not issued for this property"):
@@ -133,12 +141,46 @@ func (h *PropertyHandler) ConfirmPropertyDocumentUpload(ctx context.Context, req
 	return nil, result, nil
 }
 
+// ---------------------------------------------------------------- upload_property_document_from_url
+
+type UploadPropertyDocumentFromURLInput struct {
+	PropertyID  string `json:"propertyID"`
+	DocumentURL string `json:"document_url"`
+	Category    string `json:"category"`
+	FileName    string `json:"file_name,omitempty"`
+}
+
+func (h *PropertyHandler) UploadPropertyDocumentFromURL(ctx context.Context, req *mcp.CallToolRequest, input UploadPropertyDocumentFromURLInput) (*mcp.CallToolResult, *reisearch.PropertyDocument, error) {
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	docURL := strings.TrimSpace(input.DocumentURL)
+	if !strings.HasPrefix(docURL, "http://") && !strings.HasPrefix(docURL, "https://") {
+		return nil, nil, fmt.Errorf("document_url must be a public http(s) link to the file (not a local file path or data: URI) — for a file you hold, use get_property_document_upload_url")
+	}
+	category := strings.TrimSpace(input.Category)
+	if err := validateDocumentCategory(category, true); err != nil {
+		return nil, nil, err
+	}
+	result, err := h.client.UploadPropertyDocumentFromURL(ctx, TokenFromContext(ctx), input.PropertyID, docURL, strings.TrimSpace(input.FileName), category)
+	if err != nil {
+		var apiErr *reisearch.APIError
+		if !errors.As(err, &apiErr) {
+			return nil, nil, fmt.Errorf("%w — the document may still have been added; call list_property_documents before retrying, or you may create a duplicate", err)
+		}
+		return nil, nil, documentError(err)
+	}
+	return nil, result, nil
+}
+
 // ---------------------------------------------------------------- registration
 
 func registerDocumentTools(server *mcp.Server, h *PropertyHandler) {
 	mcp.AddTool(server, &mcp.Tool{Name: "list_property_documents", Description: "List the documents attached to a property (contracts, inspection reports, statements, bids, etc.). Requires 'propertyID'. Optional 'category' to return only one category: one of " + documentCategoryList + ". Returns { propertyID, category, count, documents: [{ category, name, s3_key, url, updated_at, group_key?, group_label? }] }. 'url' is a view/download link valid for 15 MINUTES — share it with the user right away and call this tool again for a fresh one rather than reusing an old link. group_key/group_label appear only on documents in a custom group created in the ReiSearch app. A property with no documents returns an empty list. Requires view access to the property."}, h.ListPropertyDocuments)
 
-	mcp.AddTool(server, &mcp.Tool{Name: "get_property_document_upload_url", Description: "Step 1 of 3 to attach a document file to a property. Requires 'propertyID' and 'file_name' (with extension, e.g. 'inspection.pdf'). Optional 'content_type' (defaults to the standard type for the extension). Returns { upload_url, method, headers, s3_key, expires_at }. STEP 2 — YOU must send the file bytes yourself: an HTTP PUT of the raw file to upload_url with exactly the returned headers, e.g. `curl -X PUT -H \"Content-Type: <headers.Content-Type>\" --data-binary @<local file> \"<upload_url>\"`; do NOT send an Authorization header to it; it must answer 200; it expires after 15 minutes. If you cannot make HTTP requests or read the user's file (e.g. you're in a plain chat), don't call this tool — tell the user to upload the document in the ReiSearch app. STEP 3 — call confirm_property_document_upload with the s3_key, file_name and a category; nothing appears on the property until you confirm. Allowed types: pdf, txt, rtf, md, csv, doc(x), xls(x), ppt(x), odt/ods/odp, images (jpg, png, gif, bmp, tif, heic, webp, svg), RAW photos, video (mp4, mov, avi, mkv, wmv, webm). Documents can't be deleted through the API, so confirm the right file and property with the user first. Requires edit access to the property."}, h.GetPropertyDocumentUploadURL)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_property_document_upload_url", Description: "Step 1 of 3 to attach a document file to a property. Requires 'propertyID' and 'file_name' (with extension, e.g. 'inspection.pdf'). Optional 'content_type' (defaults to the standard type for the extension). Returns { upload_url, method, headers, s3_key, expires_at }. STEP 2 — YOU must send the file bytes yourself: an HTTP PUT of the raw file to upload_url with exactly the returned headers, e.g. `curl -X PUT -H \"Content-Type: <headers.Content-Type>\" --data-binary @<local file> \"<upload_url>\"`; do NOT send an Authorization header to it; it must answer 200; it expires after 15 minutes. If you cannot make HTTP requests or read the user's file (e.g. a plain chat with no network access), don't call this tool: if the document is at a public URL use upload_property_document_from_url, otherwise tell the user to upload it in the ReiSearch app. STEP 3 — call confirm_property_document_upload with the s3_key, file_name and a category; nothing appears on the property until you confirm. Allowed types: pdf, txt, rtf, md, csv, doc(x), xls(x), ppt(x), odt/ods/odp, images (jpg, png, gif, bmp, tif, heic, webp, svg), RAW photos, video (mp4, mov, avi, mkv, wmv, webm). Documents can't be deleted through the API, so confirm the right file and property with the user first. Requires edit access to the property."}, h.GetPropertyDocumentUploadURL)
 
 	mcp.AddTool(server, &mcp.Tool{Name: "confirm_property_document_upload", Description: "Step 3 of 3 to attach a document: records a file you already PUT to the upload_url from get_property_document_upload_url. Requires 'propertyID', 's3_key' (exactly as returned for this property), 'file_name' (name shown for the document, with extension) and 'category' — exactly one of: " + documentCategoryList + ". Pick the closest; if none fits use 'additionalDocuments' — never invent or pluralize a name (e.g. 'helocStatements', 'misc' are rejected). Examples: HELOC statement → helocStatement; inspection → inspectionReport; CubiCasa floor plan → floorPlanCubiCasa; signed purchase contract → executedContract. Safe to retry: confirming the same s3_key and category again returns the existing document without a duplicate. Returns the document { category, name, s3_key, url (15-minute view link), updated_at }. Errors: 'No file found at s3_key' → the PUT didn't land, upload first; 409 → already recorded under another category. Requires edit access."}, h.ConfirmPropertyDocumentUpload)
+
+	mcp.AddTool(server, &mcp.Tool{Name: "upload_property_document_from_url", Description: "Attach a document to a property from a public URL in ONE call: the server downloads the file and records it. Use this when the file is at a link (the user shared one, or your platform gave you a download URL); for a file you hold and can PUT yourself, use get_property_document_upload_url. Requires 'propertyID', 'document_url' (a public http/https DIRECT link to the file — not a web page, login page or local path; up to 20 MB) and 'category' — exactly one of: " + documentCategoryList + " (closest fit, else 'additionalDocuments'; never invent names). Optional 'file_name' (the name to show, with extension) — pass it when the URL has no file extension. URL uploads accept only: pdf, doc(x), xls(x), ppt(x), odt/ods/odp, txt, csv, md, rtf, jpg, jpeg, png, gif, webp, bmp — the content must match the extension. Returns { category, name, s3_key, updated_at }. NOT idempotent: each call adds another copy and documents can't be deleted through the API, so confirm the file and property with the user first and don't retry blindly — call list_property_documents to check. Errors: 'document_url could not be fetched' → ask for a working direct link; 'does not match' → the link serves a page, not the file. Requires edit access."}, h.UploadPropertyDocumentFromURL)
 }
