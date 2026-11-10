@@ -119,9 +119,38 @@ func (h *PropertyHandler) GetPropertyList(ctx context.Context, req *mcp.CallTool
 	return nil, page, nil
 }
 
+// compTypes are the public comp types, exactly as GET /comps expects them
+// (lowercase, with spaces). The API checks compType only when running comps,
+// not when reading them: an unknown value reads as "no_results", which looks
+// like a real empty result. So get_comps validates it here.
+var compTypes = []string{"sold", "long term rental", "mid term rental", "short term rental", "affordable housing"}
+
+// normalizeCompType trims, lowercases and turns underscores/dashes into
+// spaces ("Long_Term_Rental" → "long term rental"), then checks the result.
+func normalizeCompType(raw string) (string, error) {
+	ct := strings.ToLower(strings.TrimSpace(raw))
+	ct = strings.Join(strings.Fields(strings.NewReplacer("_", " ", "-", " ").Replace(ct)), " ")
+	if ct == "" {
+		return "", fmt.Errorf("compType is required: one of %q", compTypes)
+	}
+	for _, t := range compTypes {
+		if ct == t {
+			return t, nil
+		}
+	}
+	return "", fmt.Errorf("unknown compType %q: must be one of %q. For a plain 'rental', ask the user whether they mean long, mid or short term", raw, compTypes)
+}
+
 func (h *PropertyHandler) GetComps(ctx context.Context, req *mcp.CallToolRequest, input GetCompsInput) (*mcp.CallToolResult, *reisearch.CompsResult, error) {
 	token := TokenFromContext(ctx)
-	result, err := h.client.GetComps(ctx, token, input.PropertyID, input.CompType)
+	if input.PropertyID == "" {
+		return nil, nil, fmt.Errorf("propertyID is required")
+	}
+	compType, err := normalizeCompType(input.CompType)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := h.client.GetComps(ctx, token, input.PropertyID, compType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1136,7 +1165,7 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_notes_for_property", Description: "List notes on a property (paginated). Requires a property id; optional limit and cursor for paging."}, h.GetNotes)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_details", Description: "Get a property's full details (core info + deal structure). Requires a property id."}, h.GetPropertyDetails)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_property_list", Description: "List all properties the current user has access to — their property dashboard/list view, including both properties they created and ones shared with them (paginated). This is the list-view companion to get_property_details. IMPORTANT: to list a user's properties, call this with NO filters — do NOT pass 'status' or 'ownership' unless the user EXPLICITLY asks for a specific stage or ownership. Nearly all properties are in the 'draft' stage (publishing is not actively used right now), so filtering by status:'published' will almost always return an empty list — never default to it. Filters (use only on explicit user request): ownership ('mine' = created by the user, 'shared' = shared with them; omit for both); status, one of 'draft', 'published', 'archived', 'deleted' (omit for all stages). limit caps results (default 10). Pass lastKey (from a previous response) to fetch the next page."}, h.GetPropertyList)
-	mcp.AddTool(server, &mcp.Tool{Name: "get_comps", Description: "READ the already-generated comparable properties ('comps') for a property under a given exit strategy. This is a read-only tool — it does NOT run/generate comps and is never billed; use run_comps to generate. Requires propertyID and compType (the exit strategy / comparison basis, e.g. 'sold', 'rental', 'affordable_housing'). The compType requirement applies ONLY to reading results here — do NOT ask for or require an exit strategy when RUNNING comps with run_comps. If the user hasn't said which exit strategy they want to READ, ASK them before calling this tool — do not guess. The result has a 'status': 'ready' (comps available), 'in_progress' (still generating — comps may already be partially populated, so show what's there and suggest checking back shortly), 'no_comps_yet' (never run for this property/strategy — offer to run comps but do NOT run them without the user's confirmation, since running comps is billed), 'no_results', 'failed', or 'cancelled'. Always relay the human-readable 'message'."}, h.GetComps)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_comps", Description: "READ the already-generated comparable properties ('comps') for a property under one comp type. Read-only and never billed; it does NOT generate comps (use run_comps). Requires 'propertyID' and 'compType' — exactly one of: 'sold', 'long term rental', 'mid term rental', 'short term rental', 'affordable housing' (lowercase, with spaces). Map the user's words: comps / sales comps / ARV / resale → 'sold'; Airbnb / VRBO / STR / vacation rental → 'short term rental'; furnished / 30+ day / traveling nurse / MTR → 'mid term rental'; annual lease / LTR / buy and hold → 'long term rental'; Section 8 / HUD / voucher → 'affordable housing'. A plain 'rental' is ambiguous — ASK which kind; if the user names no type at all, ASK rather than guess. Any other value is rejected. One run_comps generates every type at once, so if one type has no comps, others may: offer to check them. The result has a 'status': 'ready' (comps available), 'in_progress' (still generating — comps may already be partially populated, so show what's there and suggest checking back shortly), 'no_comps_yet' (never run for this property — offer to run comps but do NOT run them without the user's confirmation, since running comps is billed), 'no_results' (the run finished but found nothing for THIS type), 'failed', or 'cancelled'. Always relay the human-readable 'message'."}, h.GetComps)
 	mcp.AddTool(server, &mcp.Tool{Name: "run_comps", Description: "Start generating comparable properties ('comps') for a property. IMPORTANT: running comps does NOT take a comp type / exit strategy. Do NOT ask the user to choose 'sold', 'rental', 'affordable_housing', or any strategy before running — a single run generates comps across ALL exit strategies at once. (Choosing an exit strategy is only relevant later, when READING results with get_comps.) This is BILLED (costs credits) and runs ASYNCHRONOUSLY, so the only thing to confirm before calling is that the user is OK spending credits to run; the normal flow is to check get_comps first and only run when there are none. Requires ONLY propertyID; the backend loads the property and builds the comp subject (address, geo coordinates, beds/baths) itself — there are no other parameters to pass. The result 'status' is one of: 'in_progress' (accepted — comps are now generating; tell the user to check back shortly with get_comps, which will show each comp as it lands), 'insufficient_credits', 'already_in_progress' (a run is already underway for this property), 'invalid_request', 'no_billing_account', or 'temporarily_unavailable'. A 'property_not_found' outcome means no property exists for that propertyID — create the property first, then run comps. Always relay the human-readable 'message'."}, h.RunComps)
 	mcp.AddTool(server, &mcp.Tool{Name: "search_properties", Description: "Search the current user's OWN and SHARED properties by location and filters — their personal property database. This is a filtered search over the user's existing properties, NOT a search of homes for sale on the open market. Results are ALWAYS scoped server-side to properties the user owns or that are shared with them, and only those in the 'draft' stage; this cannot be changed from the request. All filters are optional — with none supplied it returns the caller's draft properties, most recently updated first. Filters: 'address' (free-text location; fuzzy-matches street/address/number/zip and, when set, orders results by relevance instead of date); 'city' (exact, case-insensitive); 'zipCode' (exact); 'homeTypes' (array of property types, e.g. ['house','condo']; matches ANY); 'dealTypes' (array of deal types; matches ANY); 'tags' (array of the user's property tag names; matches ANY — note: if none of the names resolve to a tag this user actually has, the result is EMPTY, not unfiltered); 'yearBuilt' (returns properties built in or after this year); 'minPrice'/'maxPrice' (listing price range); 'beds' and 'baths' (by default 'that many or more' — set 'exactBed'/'exactBath' to true to require an exact match); 'limit' (max results, default 50). Numeric fields are passed as strings (e.g. beds:'3', minPrice:'100000'); an unparseable value silently skips just that one filter. Returns a JSON array of property objects (empty array [] when nothing matches), each including its id and indexed fields (street, city, zipCode, listingPrice, bedrooms, bathrooms, propertyType, propertyTags, images, etc.)."}, h.SearchProperties)
 	mcp.AddTool(server, &mcp.Tool{Name: "create_folder", Description: "Create a folder in the current user's workspace to organize properties. Requires 'name' (1–100 characters). Optionally pass 'parentID' to nest the new folder inside an existing folder (omit to create a top-level/root folder), and 'description' for a short note. Returns the created folder object (including its id). Note: this creates a new folder every time it's called, so confirm the name with the user rather than guessing, and don't call it repeatedly for the same request."}, h.CreateFolder)
