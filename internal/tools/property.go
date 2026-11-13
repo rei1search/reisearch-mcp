@@ -1233,4 +1233,5 @@ func Register(server *mcp.Server, client *reisearch.Client) {
 	registerDirectUploadTools(server, h)
 	registerPropertyUpdateTool(server, h)
 	registerInvitationTools(server, h)
+	registerParcelTools(server, h)
 }

@@ -55,7 +55,7 @@ type liveHarness struct {
 
 func (h *liveHarness) call(name string, args map[string]any) liveResult {
 	h.t.Helper()
-	if _, ok := args["propertyID"]; !ok && name != "invite_users" {
+	if _, ok := args["propertyID"]; !ok && !noPropertyIDTools[name] {
 		args["propertyID"] = h.property
 	}
 	// Only underwriting tools (and the renovation submit) take a strategy; the
@@ -362,3 +362,6 @@ func TestLiveUnderwriting(t *testing.T) {
 		t.Errorf("FAIL cleanup: %v versions at the end, want baseline %v", end.data["count"], baseline)
 	}
 }
+
+// noPropertyIDTools take no propertyID, so the harness doesn't inject one.
+var noPropertyIDTools = map[string]bool{"invite_users": true, "get_parcel": true, "update_parcel": true, "create_parcel": true}
