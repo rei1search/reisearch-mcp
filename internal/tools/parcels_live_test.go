@@ -4,7 +4,7 @@ package tools
 // underwriting_live_test.go). Parcels are SHARED county data, so this only:
 // looks one up, adds additional_details.mcp_test, checks a stale revision is
 // refused, and removes the field again (the record ends unchanged; its
-// revision rises by 2). create_parcel is exercised only on paths that write
+// revision rises by 2). create_tax_record is exercised only on paths that write
 // nothing, unless REISEARCH_LIVE_PARCEL_EXISTS=1 also tries re-creating the
 // existing parcel (expects PARCEL_EXISTS).
 //
@@ -15,6 +15,7 @@ package tools
 //	REISEARCH_LIVE_PARCELS=1 \
 //	REISEARCH_LIVE_PARCEL_ADDRESS="120 W Comanche Ave, Tampa, FL 33604" \
 //	REISEARCH_LIVE_PARCEL_FOLIO=1644130000 \
+//	REISEARCH_LIVE_PARCEL_PROPERTY_NO_RECORD=<optional: propertyID with no county record> \
 //	go test ./internal/tools/ -run LiveParcels -v
 
 import (
@@ -36,33 +37,39 @@ func TestLiveParcels(t *testing.T) {
 	pk0 := "0123456789abcdef0123456789abcdef"
 
 	// 1. Client-side validation (no API call).
-	h.failsWith("get: blank address", h.call("get_parcel", map[string]any{"address": " "}), "address is required")
-	h.failsWith("update: bad pk", h.call("update_parcel", map[string]any{"pk": "ABC", "folio": folio, "expected_revision": 0, "patch": map[string]any{"lat": 1}}), "32-character")
-	h.failsWith("update: empty patch", h.call("update_parcel", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{}}), "patch is required")
-	h.failsWith("update: immutable", h.call("update_parcel", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{"folio_number": "x"}}), "can never be changed")
-	h.failsWith("update: read-only", h.call("update_parcel", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{"revision": 9}}), "managed by the server")
-	h.failsWith("create: read-only", h.call("create_parcel", map[string]any{"parcel": map[string]any{"PK": pk0}}), "set by the server")
+	h.failsWith("get: no address or propertyID", h.call("get_tax_record", map[string]any{"address": " "}), "either 'propertyID'")
+	h.failsWith("update: bad pk", h.call("update_tax_record", map[string]any{"pk": "ABC", "folio": folio, "expected_revision": 0, "patch": map[string]any{"lat": 1}}), "32-character")
+	h.failsWith("update: empty patch", h.call("update_tax_record", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{}}), "patch is required")
+	h.failsWith("update: immutable", h.call("update_tax_record", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{"folio_number": "x"}}), "can never be changed")
+	h.failsWith("update: read-only", h.call("update_tax_record", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{"revision": 9}}), "managed by the server")
+	h.failsWith("create: read-only", h.call("create_tax_record", map[string]any{"parcel": map[string]any{"PK": pk0}}), "set by the server")
 
 	// 2. API: not found, and a create that fails validation (nothing written).
-	h.failsWith("get: unknown address", h.call("get_parcel", map[string]any{"address": "1 Nonexistent Mcptest Rd, Nowhere, ZZ 00000"}), "PARCEL_NOT_FOUND")
-	h.failsWith("create: missing fields", h.call("create_parcel", map[string]any{"parcel": map[string]any{"folio_number": "MCPTEST"}}), "VALIDATION")
-	h.failsWith("update: unknown pk", h.call("update_parcel", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{"additional_details": map[string]any{"mcp_test": "x"}}}), "PARCEL_NOT_FOUND")
+	h.failsWith("get: unknown address", h.call("get_tax_record", map[string]any{"address": "1 Nonexistent Mcptest Rd, Nowhere, ZZ 00000"}), "PARCEL_NOT_FOUND")
+	h.failsWith("create: missing fields", h.call("create_tax_record", map[string]any{"parcel": map[string]any{"folio_number": "MCPTEST"}}), "VALIDATION")
+	h.failsWith("update: unknown pk", h.call("update_tax_record", map[string]any{"pk": pk0, "folio": folio, "expected_revision": 0, "patch": map[string]any{"additional_details": map[string]any{"mcp_test": "x"}}}), "PARCEL_NOT_FOUND")
+
+	// 2b. Lookup by propertyID (optional): its address is used; a property with
+	// no county record gets the condo/unit hint and names the address searched.
+	if pid := os.Getenv("REISEARCH_LIVE_PARCEL_PROPERTY_NO_RECORD"); pid != "" {
+		h.failsWith("get by propertyID (no record)", h.call("get_tax_record", map[string]any{"propertyID": pid}), "condo")
+	}
 
 	// 3. Lookup.
-	got := h.call("get_parcel", map[string]any{"address": address, "folio": folio})
-	if !h.ok("get_parcel", got) {
+	got := h.call("get_tax_record", map[string]any{"address": address, "folio": folio})
+	if !h.ok("get_tax_record", got) {
 		t.FailNow()
 	}
 	pk, _ := got.data["pk"].(string)
 	rev, _ := got.data["revision"].(float64)
 	t.Logf("parcel pk=%s folio=%v revision=%v matched_by=%v", pk, got.data["folio"], rev, got.data["matched_by"])
 	if got.data["folio"] != folio || got.data["record"] == nil {
-		t.Fatalf("FAIL get_parcel: unexpected result %v", got.data)
+		t.Fatalf("FAIL get_tax_record: unexpected result %v", got.data)
 	}
 
 	// 4. Add a test field, refuse a stale revision, remove the field.
 	marker := fmt.Sprintf("mcp live test %d — safe to ignore", time.Now().Unix())
-	upd := h.call("update_parcel", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev,
+	upd := h.call("update_tax_record", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev,
 		"patch": map[string]any{"additional_details": map[string]any{"mcp_test": marker}}})
 	if !h.ok("update: add test field", upd) {
 		t.FailNow()
@@ -82,7 +89,7 @@ func TestLiveParcels(t *testing.T) {
 		} else {
 			undo = map[string]any{"additional_details": nil}
 		}
-		r := h.call("update_parcel", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev2, "patch": undo})
+		r := h.call("update_tax_record", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev2, "patch": undo})
 		if h.ok("cleanup: remove test field", r) && dig(r.data, "record", "additional_details", "mcp_test") != nil {
 			t.Errorf("FAIL cleanup: mcp_test still present")
 		}
@@ -90,15 +97,15 @@ func TestLiveParcels(t *testing.T) {
 			t.Errorf("FAIL cleanup: additional_details left behind")
 		}
 	}()
-	h.failsWith("update: stale revision", h.call("update_parcel", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev,
+	h.failsWith("update: stale revision", h.call("update_tax_record", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev,
 		"patch": map[string]any{"additional_details": map[string]any{"mcp_test": "stale"}}}), "someone else changed")
-	h.failsWith("update: bad type", h.call("update_parcel", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev2,
+	h.failsWith("update: bad type", h.call("update_tax_record", map[string]any{"pk": pk, "folio": folio, "expected_revision": rev2,
 		"patch": map[string]any{"valuation": map[string]any{"market_value": "100"}}}), "VALIDATION")
 
 	// 5. Optional: re-create the existing parcel → PARCEL_EXISTS, nothing written.
 	if os.Getenv("REISEARCH_LIVE_PARCEL_EXISTS") == "1" {
 		rec, _ := got.data["record"].(map[string]any)
-		h.failsWith("create: existing", h.call("create_parcel", map[string]any{"parcel": map[string]any{
+		h.failsWith("create: existing", h.call("create_tax_record", map[string]any{"parcel": map[string]any{
 			"folio_number": folio, "property_address": rec["property_address"], "source": rec["source"],
 		}}), "PARCEL_EXISTS")
 	}

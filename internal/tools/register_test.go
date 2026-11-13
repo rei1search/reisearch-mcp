@@ -76,9 +76,9 @@ func TestRegisteredTools(t *testing.T) {
 		"confirm_property_image_upload",
 		"get_renovation_image_upload_url",
 		"confirm_renovation_image_upload",
-		"get_parcel",
-		"update_parcel",
-		"create_parcel",
+		"get_tax_record",
+		"update_tax_record",
+		"create_tax_record",
 	} {
 		if !names[name] {
 			t.Errorf("tool %q is not registered", name)

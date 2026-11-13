@@ -364,4 +364,4 @@ func TestLiveUnderwriting(t *testing.T) {
 }
 
 // noPropertyIDTools take no propertyID, so the harness doesn't inject one.
-var noPropertyIDTools = map[string]bool{"invite_users": true, "get_parcel": true, "update_parcel": true, "create_parcel": true}
+var noPropertyIDTools = map[string]bool{"invite_users": true, "get_tax_record": true, "update_tax_record": true, "create_tax_record": true}
